@@ -1,22 +1,51 @@
-use lambila_rs::VhdlFile;
-use std::env;
+use clap::Parser;
+use lambila_rs::VhdlProject;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// VHDL Hierarchy parsed extraction framework
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Recursively search through directories for .vhd and .vhdl files
+    #[arg(short, long)]
+    recursive: bool,
+
+    /// VHDL file or directory paths to parse
+    #[arg(required = true)]
+    paths: Vec<PathBuf>,
+}
+
+fn parse_path(project: &mut VhdlProject, path: &Path, recursive: bool) {
+    if path.is_dir() {
+        if !recursive {
+            eprintln!("Skipping directory {} (use -r to recurse)", path.display());
+            return;
+        }
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                parse_path(project, &entry.path(), recursive);
+            }
+        }
+    } else if path.is_file() {
+        if let Some(ext) = path.extension() {
+            if ext == "vhd" || ext == "vhdl" {
+                if let Err(e) = project.parse_file(path.to_str().unwrap()) {
+                    eprintln!("Error opening or parsing file {}: {}", path.display(), e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
+    let mut project = VhdlProject::new();
 
-    if args.len() < 2 {
-        eprintln!("Usage: {} <file_path>", args[0]);
-        std::process::exit(1);
+    for path in &cli.paths {
+        parse_path(&mut project, path, cli.recursive);
     }
 
-    let file_path = &args[1];
-    match VhdlFile::open(file_path) {
-        Ok(vhdl_file) => {
-            vhdl_file.print_entities();
-        }
-        Err(e) => {
-            eprintln!("Error opening or parsing file {}: {}", file_path, e);
-            std::process::exit(1);
-        }
-    }
+    project.print_hierarchy();
 }
