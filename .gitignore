@@ -1,0 +1,4 @@
+.*.swp
+.devcontainer
+/target
+/test_vhdl
