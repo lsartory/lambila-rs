@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::collections::HashMap;
 
 fn extract_last_number(s: &str) -> Option<i32> {
     let mut num_str = String::new();
@@ -38,7 +39,30 @@ fn extract_first_number(s: &str) -> Option<i32> {
     }
 }
 
-fn parse_range_size(range_expr: &str, entity: Option<&Entity>) -> usize {
+pub fn calculate_bits(data_type: &str, range: Option<&Range>, entity: Option<&Entity>) -> Option<usize> {
+    let dt = data_type.to_lowercase();
+    if dt == "std_logic" || dt == "bit" {
+        return Some(1);
+    }
+    
+    if let Some(r) = range {
+        let dir_str = match r.direction { Direction::To => "to", Direction::Downto => "downto" };
+        let count = parse_range_size(&format!("{} {} {}", r.left, dir_str, r.right), entity);
+        
+        let mut bits_per_element = 1;
+        if dt.contains("usb_byte_array_t") || dt.contains("usb_byte_t") || dt.contains("usb_ep_input_signals_t") || dt.contains("usb_ep_output_signals_t") {
+            bits_per_element = 8; 
+        } else if dt.contains("usb_dev_addr_t") {
+            bits_per_element = 7;
+        }
+        
+        return Some(count * bits_per_element);
+    }
+    
+    None
+}
+
+pub fn parse_range_size(range_expr: &str, entity: Option<&Entity>) -> usize {
     let expr = range_expr.to_lowercase();
 
     // Check for 'range
@@ -72,13 +96,14 @@ fn parse_range_size(range_expr: &str, entity: Option<&Entity>) -> usize {
         return 1; // Fallback
     }
 
-    let parts: Vec<&str> = if expr.contains(" downto ") {
-        expr.split(" downto ").collect()
-    } else if expr.contains(" to ") {
-        expr.split(" to ").collect()
-    } else {
-        Vec::new()
-    };
+    let mut parts = Vec::new();
+    if let Some(idx) = expr.find("downto") {
+        parts.push(&expr[..idx]);
+        parts.push(&expr[idx + 6..]);
+    } else if let Some(idx) = expr.find("to") {
+        parts.push(&expr[..idx]);
+        parts.push(&expr[idx + 2..]);
+    }
 
     if parts.len() >= 2 {
         let left = extract_last_number(parts[0]);
@@ -127,7 +152,23 @@ pub struct Port {
 pub struct Instantiation {
     pub entity_name: String,
     pub ports: Vec<Port>,
+    pub port_map: HashMap<String, String>,
     pub file_name: String,
+    pub line: usize,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum TokenType {
+    Identifier(String), // Matches words, keywords (e.g., "entity", "std_logic")
+    Number(String),     // Matches numbers (e.g., "105", "0")
+    StringLiteral(String), // Matches string literals
+    CharLiteral(char),  // Matches character literals (e.g. '0')
+    Symbol(String),     // Matches operators/symbols: "(", ")", ":", ";", ",", "=>", etc.
+}
+
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub token_type: TokenType,
     pub line: usize,
 }
 
@@ -135,6 +176,7 @@ pub struct Instantiation {
 pub struct Entity {
     pub name: String,
     pub ports: Vec<Port>,
+    pub signals: Vec<Port>,
     pub file_name: String,
     pub line: usize,
     pub instantiations: Vec<Instantiation>,
@@ -165,278 +207,17 @@ impl VhdlProject {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    pub fn parse_reader<R: BufRead>(&mut self, reader: R, file_name: &str) -> Result<(), String> {
-        let mut current_entity: Option<Entity> = None;
-        let mut current_arch_entity_idx: Option<usize> = None;
-        let mut in_port_block = false;
-        let mut generate_stack: Vec<usize> = Vec::new();
-
-        for (line_idx, line_result) in reader.lines().enumerate() {
-            let line_num = line_idx + 1;
-            let raw_line = match line_result {
-                Ok(s) => s,
-                Err(e) => return Err(format!("Error reading line: {}", e)),
-            };
-
-            let line_str = raw_line.trim().to_lowercase();
-
-            // Skip comments and empty lines
-            if line_str.is_empty() || line_str.starts_with("--") {
-                continue;
-            }
-
-            // Remove inline comments for parsing
-            let line_str_no_comment = if let Some(idx) = line_str.find("--") {
-                &line_str[..idx]
-            } else {
-                &line_str
-            };
-            let line_str_no_comment = line_str_no_comment.trim();
-
-            let raw_line_no_comment = if let Some(idx) = raw_line.find("--") {
-                &raw_line[..idx]
-            } else {
-                &raw_line
-            };
-            let raw_line_no_comment = raw_line_no_comment.trim();
-            let raw_line_lower = raw_line_no_comment.to_lowercase();
-
-            // Detect entity start
-            if line_str_no_comment.starts_with("entity ") && line_str_no_comment.contains(" is") {
-                let parts: Vec<&str> = raw_line_no_comment.split_whitespace().collect();
-                if parts.len() >= 3 && parts[2].to_lowercase() == "is" {
-                    current_entity = Some(Entity {
-                        name: parts[1].to_string(),
-                        ports: Vec::new(),
-                        file_name: file_name.to_string(),
-                        line: line_num,
-                        instantiations: Vec::new(),
-                    });
-                }
-            } else if let Some(ref mut entity) = current_entity {
-                // Detect entity end
-                if line_str_no_comment.starts_with("end entity")
-                    || line_str_no_comment
-                        .starts_with(&format!("end {}", entity.name.to_lowercase()))
-                    || line_str_no_comment.starts_with("end;")
-                    || line_str_no_comment == format!("end {};", entity.name.to_lowercase())
-                    || line_str_no_comment == format!("end {}", entity.name.to_lowercase())
-                {
-                    self.entities.push(current_entity.take().unwrap());
-                    in_port_block = false;
-                } else {
-                    if line_str_no_comment.contains("port (")
-                        || line_str_no_comment.contains("port(")
-                    {
-                        in_port_block = true;
-                    }
-
-                    if in_port_block {
-                        let port_part = if let Some(idx) = raw_line_lower.find("port (") {
-                            &raw_line_no_comment[idx + 6..]
-                        } else if let Some(idx) = raw_line_lower.find("port(") {
-                            &raw_line_no_comment[idx + 5..]
-                        } else {
-                            raw_line_no_comment
-                        };
-
-                        let parts: Vec<&str> = port_part.split(':').collect();
-                        if parts.len() == 2 {
-                            let name_part = parts[0].trim();
-                            // Find the raw text starting right after the colon
-                            let colon_idx = port_part.find(':').unwrap();
-                            let raw_type_str = &port_part[colon_idx + 1..].trim();
-
-                            // To handle cases like "std_logic_vector(105 downto 0 );"
-                            // we slice off the trailing ';' and ');' safely.
-                            let mut type_string = raw_type_str.to_string();
-                            if type_string.ends_with(';') {
-                                type_string.pop();
-                                type_string = type_string.trim().to_string();
-                            }
-                            // Only strip an ending ')' if it's NOT part of an array block!
-                            // If the count of '(' equals the count of ')', stripping the ')' breaks the compile.
-                            let open_parens = type_string.chars().filter(|c| *c == '(').count();
-                            let close_parens = type_string.chars().filter(|c| *c == ')').count();
-                            if type_string.ends_with(')') && close_parens > open_parens {
-                                type_string.pop();
-                            }
-
-                            let type_part = type_string.trim();
-
-                            let type_part_str = type_part.to_string();
-                            let type_tokens: Vec<&str> = type_part_str.split_whitespace().collect();
-                            if !type_tokens.is_empty() {
-                                let mode_str = type_tokens[0].to_lowercase();
-                                let mode = match mode_str.as_str() {
-                                    "in" => Some(PortMode::In),
-                                    "out" => Some(PortMode::Out),
-                                    "inout" => Some(PortMode::InOut),
-                                    "buffer" => Some(PortMode::Buffer),
-                                    "linkage" => Some(PortMode::Linkage),
-                                    _ => None,
-                                };
-
-                                if let Some(valid_mode) = mode {
-                                    // Extract data_type exactly as it appears after the mode string
-                                    let first_token = type_tokens[0];
-                                    let idx = type_part_str.find(first_token).unwrap()
-                                        + first_token.len();
-                                    let mut data_type = type_part_str[idx..].trim().to_string();
-                                    let mut range = None;
-
-                                    // Extract explicit array blocks like: std_logic_vector(105 downto 0) natively mapping bounds
-                                    if let Some(open_idx) = data_type.find('(') {
-                                        if let Some(close_idx) = data_type.rfind(')') {
-                                            if close_idx > open_idx {
-                                                let range_str = data_type[open_idx + 1..close_idx]
-                                                    .trim()
-                                                    .to_string();
-                                                if let Some(downto_idx) =
-                                                    range_str.to_lowercase().find(" downto ")
-                                                {
-                                                    range = Some(Range {
-                                                        left: range_str[..downto_idx]
-                                                            .trim()
-                                                            .to_string(),
-                                                        right: range_str[downto_idx + 8..]
-                                                            .trim()
-                                                            .to_string(),
-                                                        direction: Direction::Downto,
-                                                    });
-                                                } else if let Some(to_idx) =
-                                                    range_str.to_lowercase().find(" to ")
-                                                {
-                                                    range = Some(Range {
-                                                        left: range_str[..to_idx]
-                                                            .trim()
-                                                            .to_string(),
-                                                        right: range_str[to_idx + 4..]
-                                                            .trim()
-                                                            .to_string(),
-                                                        direction: Direction::To,
-                                                    });
-                                                }
-                                                data_type =
-                                                    data_type[..open_idx].trim().to_string();
-                                            }
-                                        }
-                                    }
-
-                                    let names: Vec<&str> = name_part.split(',').collect();
-                                    for name in names {
-                                        let clean_name = name.trim();
-                                        if !clean_name.is_empty() {
-                                            entity.ports.push(Port {
-                                                name: clean_name.to_string(),
-                                                mode: valid_mode.clone(),
-                                                data_type: data_type.clone(),
-                                                range: range.clone(),
-                                                file_name: file_name.to_string(),
-                                                line: line_num,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if line_str_no_comment.ends_with(");") || line_str_no_comment == ");" {
-                            in_port_block = false;
-                        }
-                    }
-                }
-            } else {
-                // Not inside an entity definition, could be an architecture or instantiation
-                if line_str_no_comment.starts_with("architecture ")
-                    && line_str_no_comment.contains(" of ")
-                {
-                    let parts: Vec<&str> = raw_line_no_comment.split_whitespace().collect();
-                    if parts.len() >= 4 && parts[2].to_lowercase() == "of" {
-                        let target_entity = parts[3].trim_end_matches("is").trim();
-                        // Find the entity in self.entities
-                        current_arch_entity_idx = self
-                            .entities
-                            .iter()
-                            .position(|e| e.name.eq_ignore_ascii_case(target_entity));
-                    }
-                } else if line_str_no_comment.starts_with("end architecture")
-                    || line_str_no_comment.starts_with("end behavioral")
-                    || line_str_no_comment.starts_with("end rtl")
-                {
-                    // Very naive architecture end tracking, but it works for matching bounded scope
-                    current_arch_entity_idx = None;
-                    generate_stack.clear();
-                } else if let Some(arch_idx) = current_arch_entity_idx {
-                    // Inside architecture body
-
-                    if line_str_no_comment.ends_with("generate")
-                        || line_str_no_comment.ends_with("generate;")
-                    {
-                        if line_str_no_comment.starts_with("end generate")
-                            || line_str_no_comment.contains(" end generate")
-                        {
-                            let _ = generate_stack.pop();
-                        } else if line_str_no_comment.contains(" for ") {
-                            let count = {
-                                let ent = &self.entities[arch_idx];
-                                parse_range_size(&raw_line_lower, Some(ent))
-                            };
-                            generate_stack.push(count);
-                        }
-                    } else if line_str_no_comment.contains(":") {
-                        let parts: Vec<&str> = raw_line_no_comment.split(':').collect();
-                        if parts.len() >= 2 {
-                            let right_side = parts[1..].join(":").trim().to_string();
-                            let right_side_lower = right_side.to_lowercase();
-
-                            let mut instantiated_entity = None;
-
-                            if right_side_lower.starts_with("entity work.") {
-                                let after_work = &right_side[12..]; // skip "entity work."
-                                let tokens: Vec<&str> = after_work.split_whitespace().collect();
-                                if !tokens.is_empty() {
-                                    // Could be "entity work.MyEntity generic map ..." or just "entity work.MyEntity"
-                                    instantiated_entity = Some(tokens[0].to_string());
-                                }
-                            } else if right_side_lower.contains("port map")
-                                || right_side_lower.contains("generic map")
-                            {
-                                // Likely standard component instantiation, e.g., "my_inst: MyComponent port map (...)"
-                                let tokens: Vec<&str> = right_side.split_whitespace().collect();
-                                if !tokens.is_empty()
-                                    && !tokens[0].eq_ignore_ascii_case("port")
-                                    && !tokens[0].eq_ignore_ascii_case("generic")
-                                {
-                                    instantiated_entity = Some(tokens[0].to_string());
-                                }
-                            }
-
-                            if let Some(mut name) = instantiated_entity {
-                                // Clean up the name in case it ends with port map keywords or parenthesis if it was unspaced
-                                if let Some(idx) = name.find('(') {
-                                    name = name[..idx].to_string();
-                                }
-
-                                let mut multiplier: usize = generate_stack.iter().product();
-                                if multiplier == 0 {
-                                    multiplier = 1;
-                                }
-
-                                for _ in 0..multiplier {
-                                    self.entities[arch_idx].instantiations.push(Instantiation {
-                                        entity_name: name.clone(),
-                                        ports: Vec::new(),
-                                        file_name: file_name.to_string(),
-                                        line: line_num,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    pub fn parse_reader<R: BufRead>(&mut self, mut reader: R, file_name: &str) -> Result<(), String> {
+        let mut content = String::new();
+        if let Err(e) = reader.read_to_string(&mut content) {
+            return Err(format!("Error reading file: {}", e));
         }
+        
+        // Pass the entire VHDL document securely to the Tokenizer
+        let tokens = Self::tokenize(&content);
+        
+        // Process tokens correctly mapping the state machine
+        self.parse_tokens(&tokens, file_name);
 
         Ok(())
     }
@@ -465,7 +246,7 @@ impl VhdlProject {
             for (idx, root) in roots.iter().enumerate() {
                 let mut path = Vec::new();
                 let current_id = format!("{}", idx + 1);
-                self.print_entity_tree(root, 0, &mut path, &current_id, None);
+                self.print_entity_tree(root, 0, &mut path, &current_id, None, None);
             }
         }
     }
@@ -477,6 +258,7 @@ impl VhdlProject {
         path: &mut Vec<&'a str>,
         current_id: &str,
         instantiation_origin: Option<&Instantiation>,
+        parent_entity: Option<&'a Entity>,
     ) {
         let indent = " ".repeat(depth * 4);
 
@@ -510,36 +292,169 @@ impl VhdlProject {
 
         let port_indent = " ".repeat(depth * 4 + 2);
         for (p_idx, port) in entity.ports.iter().enumerate() {
-            if let Some(ref r) = port.range {
+            let mut resolved_range = port.range.clone();
+            let mut mapped_msg = String::new();
+
+            if resolved_range.is_none() {
+                if let Some(inst) = instantiation_origin {
+                    let mut matched_key = None;
+                    let mut matched_val = None;
+                    
+                    for (k, v) in &inst.port_map {
+                        if k.eq_ignore_ascii_case(&port.name) || k.to_lowercase().starts_with(&format!("{}(", port.name.to_lowercase())) {
+                            matched_key = Some(k.clone());
+                            matched_val = Some(v.clone());
+                            break;
+                        }
+                    }
+
+                    if let Some(mapped_val) = matched_val {
+                        let k = matched_key.unwrap();
+                        let mut display_val = mapped_val.clone();
+                        
+                        if !k.eq_ignore_ascii_case(&port.name) {
+                            display_val = format!("{} via {}", mapped_val, k);
+                        }
+
+                        let mut base_sig_name = mapped_val.clone();
+                        if let Some(idx) = base_sig_name.find('(') {
+                            base_sig_name = base_sig_name[..idx].trim().to_string();
+                        }
+
+                        // Determine explicit range if the mapping key was sliced, e.g. INPUT(3 downto 0) or INPUT(0)
+                        if let Some(slice_start) = k.find('(') {
+                            if let Some(slice_end) = k.rfind(')') {
+                                let slice_val = &k[slice_start+1..slice_end];
+                                let dir = if slice_val.contains("downto") { Direction::Downto } else { Direction::To };
+                                let parts: Vec<&str> = if dir == Direction::Downto { slice_val.split("downto").collect() } else { slice_val.split("to").collect() };
+                                if parts.len() == 2 {
+                                    resolved_range = Some(Range { left: parts[0].trim().to_string(), right: parts[1].trim().to_string(), direction: dir });
+                                } else {
+                                    resolved_range = Some(Range { left: slice_val.trim().to_string(), right: slice_val.trim().to_string(), direction: dir });
+                                }
+                            }
+                        }
+
+                        // Look up in parent
+                        mapped_msg = format!(" [Mapped to: {}]", display_val);
+                        if resolved_range.is_none() {
+                            if let Some(parent) = parent_entity {
+                                if let Some(p_port) = parent.ports.iter().find(|p| p.name.eq_ignore_ascii_case(&base_sig_name)) {
+                                    resolved_range = p_port.range.clone();
+                                    if p_port.range.is_none() {
+                                        if let Some(start) = p_port.data_type.find('(') {
+                                            if let Some(end) = p_port.data_type.rfind(')') {
+                                                mapped_msg = format!(" [Mapped to: {} -> Range: {}]", display_val, &p_port.data_type[start+1..end].trim());
+                                                let r_str = &p_port.data_type[start+1..end].trim();
+                                                let dir = if r_str.contains("downto") { Direction::Downto } else { Direction::To };
+                                                let parts: Vec<&str> = if dir == Direction::Downto { r_str.split("downto").collect() } else { r_str.split("to").collect() };
+                                                if parts.len() == 2 {
+                                                    resolved_range = Some(Range { left: parts[0].trim().to_string(), right: parts[1].trim().to_string(), direction: dir });
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else if let Some(p_sig) = parent.signals.iter().find(|s| s.name.eq_ignore_ascii_case(&base_sig_name)) {
+                                    if let Some(start) = p_sig.data_type.find('(') {
+                                        if let Some(end) = p_sig.data_type.rfind(')') {
+                                            mapped_msg = format!(" [Mapped to: {} -> Range: {}]", display_val, &p_sig.data_type[start+1..end].trim());
+                                            let r_str = &p_sig.data_type[start+1..end].trim();
+                                            let dir = if r_str.contains("downto") { Direction::Downto } else { Direction::To };
+                                            let parts: Vec<&str> = if dir == Direction::Downto { r_str.split("downto").collect() } else { r_str.split("to").collect() };
+                                            if parts.len() == 2 {
+                                                resolved_range = Some(Range { left: parts[0].trim().to_string(), right: parts[1].trim().to_string(), direction: dir });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut size_msg = String::new();
+            if let Some(size) = calculate_bits(&port.data_type, resolved_range.as_ref(), parent_entity) {
+                size_msg = format!(" [Size: {} bits]", size);
+            }
+
+            if let Some(ref r) = resolved_range {
                 let dir_str = match r.direction {
                     Direction::To => "to",
                     Direction::Downto => "downto",
                 };
                 println!(
-                    "{}[ID: {}.p{}] Port: {} : {:?} {} [Range: {} {} {}] ({}:{})",
+                    "{}[ID: {}.p{}] Port: {} : {:?} {}{} [Range: {} {} {}]{} ({}:{})",
                     port_indent,
                     current_id,
                     p_idx + 1,
                     port.name,
                     port.mode,
                     port.data_type,
+                    mapped_msg,
                     r.left,
                     dir_str,
                     r.right,
+                    size_msg,
                     port.file_name,
                     port.line
                 );
             } else {
                 println!(
-                    "{}[ID: {}.p{}] Port: {} : {:?} {} ({}:{})",
+                    "{}[ID: {}.p{}] Port: {} : {:?} {}{}{} ({}:{})",
                     port_indent,
                     current_id,
                     p_idx + 1,
                     port.name,
                     port.mode,
                     port.data_type,
+                    mapped_msg,
+                    size_msg,
                     port.file_name,
                     port.line
+                );
+            }
+        }
+
+        let sig_indent = " ".repeat(depth * 4 + 2);
+        for (s_idx, sig) in entity.signals.iter().enumerate() {
+            let mut size_msg = String::new();
+            if let Some(size) = calculate_bits(&sig.data_type, sig.range.as_ref(), Some(entity)) {
+                size_msg = format!(" [Size: {} bits]", size);
+            }
+
+            if let Some(ref r) = sig.range {
+                let dir_str = match r.direction {
+                    Direction::To => "to",
+                    Direction::Downto => "downto",
+                };
+                println!(
+                    "{}[ID: {}.s{}] Signal: {} : {}{} [Range: {} {} {}]{} ({}:{})",
+                    sig_indent,
+                    current_id,
+                    s_idx + 1,
+                    sig.name,
+                    sig.data_type,
+                    "",
+                    r.left,
+                    dir_str,
+                    r.right,
+                    size_msg,
+                    sig.file_name,
+                    sig.line
+                );
+            } else {
+                println!(
+                    "{}[ID: {}.s{}] Signal: {} : {}{}{} ({}:{})",
+                    sig_indent,
+                    current_id,
+                    s_idx + 1,
+                    sig.name,
+                    sig.data_type,
+                    "",
+                    size_msg,
+                    sig.file_name,
+                    sig.line
                 );
             }
         }
@@ -551,7 +466,7 @@ impl VhdlProject {
                 .find(|e| e.name.eq_ignore_ascii_case(&inst.entity_name))
             {
                 let child_id = format!("{}.{}", current_id, inst_idx + 1);
-                self.print_entity_tree(child_entity, depth + 1, path, &child_id, Some(inst));
+                self.print_entity_tree(child_entity, depth + 1, path, &child_id, Some(inst), Some(entity));
             } else {
                 let child_indent = " ".repeat((depth + 1) * 4);
                 println!(
@@ -567,6 +482,820 @@ impl VhdlProject {
         }
 
         path.pop();
+    }
+
+    pub fn tokenize(input: &str) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        let mut line = 1;
+        let mut chars = input.chars().peekable();
+
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() {
+               if c == '\n' { line += 1; }
+               chars.next();
+               continue;
+            }
+
+            match c {
+                '-' => {
+                    chars.next();
+                    if chars.peek() == Some(&'-') {
+                        // VHDL Comment! Skip to newline
+                        while let Some(&nc) = chars.peek() {
+                            if nc == '\n' {
+                                break;
+                            }
+                            chars.next();
+                        }
+                    } else {
+                        tokens.push(Token { token_type: TokenType::Symbol("-".to_string()), line });
+                    }
+                }
+                '=' => {
+                    chars.next();
+                    if chars.peek() == Some(&'>') {
+                        chars.next();
+                        tokens.push(Token { token_type: TokenType::Symbol("=>".to_string()), line });
+                    } else {
+                        tokens.push(Token { token_type: TokenType::Symbol("=".to_string()), line });
+                    }
+                }
+                ':' => {
+                    chars.next();
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        tokens.push(Token { token_type: TokenType::Symbol(":=".to_string()), line });
+                    } else {
+                        tokens.push(Token { token_type: TokenType::Symbol(":".to_string()), line });
+                    }
+                }
+                '/' => {
+                    chars.next();
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        tokens.push(Token { token_type: TokenType::Symbol("/=".to_string()), line });
+                    } else {
+                        tokens.push(Token { token_type: TokenType::Symbol("/".to_string()), line });
+                    }
+                }
+                '<' => {
+                    chars.next();
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        tokens.push(Token { token_type: TokenType::Symbol("<=".to_string()), line });
+                    } else {
+                        tokens.push(Token { token_type: TokenType::Symbol("<".to_string()), line });
+                    }
+                }
+                '>' => {
+                    chars.next();
+                    if chars.peek() == Some(&'=') {
+                        chars.next();
+                        tokens.push(Token { token_type: TokenType::Symbol(">=".to_string()), line });
+                    } else {
+                        tokens.push(Token { token_type: TokenType::Symbol(">".to_string()), line });
+                    }
+                }
+                '"' => {
+                    chars.next();
+                    let mut s = String::new();
+                    while let Some(&nc) = chars.peek() {
+                        if nc == '"' {
+                            chars.next(); // Consume closing quote
+                            break;
+                        } else if nc == '\n' {
+                            line += 1;
+                        }
+                        s.push(nc);
+                        chars.next();
+                    }
+                    tokens.push(Token { token_type: TokenType::StringLiteral(s), line });
+                }
+                '\'' => {
+                    chars.next(); // consume '\''
+                    if let Some(&nc) = chars.peek() {
+                        if nc.is_alphabetic() {
+                            // Attribute! E.g., 'range or 'high
+                            let mut ident = String::new();
+                            ident.push('\'');
+                            while let Some(&cc) = chars.peek() {
+                                if cc.is_alphanumeric() || cc == '_' {
+                                    ident.push(cc);
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                            tokens.push(Token { token_type: TokenType::Identifier(ident), line });
+                        } else {
+                            // E.g. bit string '1'
+                            let val = nc;
+                            chars.next();
+                            if chars.peek() == Some(&'\'') {
+                                chars.next();
+                                tokens.push(Token { token_type: TokenType::CharLiteral(val), line });
+                            } else {
+                                tokens.push(Token { token_type: TokenType::Symbol("'".to_string()), line });
+                            }
+                        }
+                    } else {
+                         tokens.push(Token { token_type: TokenType::Symbol("'".to_string()), line });
+                    }
+                }
+                '(' | ')' | ';' | ',' | '+' | '*' | '&' | '|' | '.' => {
+                    tokens.push(Token { token_type: TokenType::Symbol(c.to_string()), line });
+                    chars.next();
+                }
+                _ if c.is_alphabetic() => {
+                    let mut ident = String::new();
+                    while let Some(&nc) = chars.peek() {
+                        if nc.is_alphanumeric() || nc == '_' || nc == '.' {
+                            ident.push(nc);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    tokens.push(Token { token_type: TokenType::Identifier(ident), line });
+                }
+                _ if c.is_ascii_digit() => {
+                    let mut num = String::new();
+                    while let Some(&nc) = chars.peek() {
+                        if nc.is_ascii_digit() || nc == '.' || nc == '_' || nc.is_alphabetic() || nc == '#' {
+                            // E.g. sizes like 48MHz or 16#FF#
+                            num.push(nc);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    tokens.push(Token { token_type: TokenType::Number(num), line });
+                }
+                _ => {
+                    tokens.push(Token { token_type: TokenType::Symbol(c.to_string()), line });
+                    chars.next();
+                }
+            }
+        }
+        tokens
+    }
+
+    pub fn parse_tokens(&mut self, tokens: &[Token], file_name: &str) {
+        let mut idx = 0;
+        let mut current_entity: Option<Entity> = None;
+        let mut current_arch_entity_idx: Option<usize> = None;
+        let mut current_arch_name: Option<String> = None;
+        let mut generate_stack: Vec<usize> = Vec::new();
+
+        while idx < tokens.len() {
+            let t = &tokens[idx];
+
+            match &t.token_type {
+                // Wait for entity declaration
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("entity") => {
+                    idx += 1;
+                    if let Some(name_token) = tokens.get(idx) {
+                        if let TokenType::Identifier(name) = &name_token.token_type {
+                            idx += 1;
+                            if let Some(is_token) = tokens.get(idx) {
+                                if let TokenType::Identifier(is_id) = &is_token.token_type {
+                                    if is_id.eq_ignore_ascii_case("is") {
+                                        current_entity = Some(Entity {
+                                            name: name.clone(),
+                                            ports: Vec::new(),
+                                            signals: Vec::new(),
+                                            file_name: file_name.to_string(),
+                                            line: t.line,
+                                            instantiations: Vec::new(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // End Entity OR End Architecture
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("end") => {
+                    idx += 1;
+                    if let Some(next_token) = tokens.get(idx) {
+                        if let TokenType::Identifier(next_id) = &next_token.token_type {
+                            if next_id.eq_ignore_ascii_case("entity") || 
+                               (current_entity.is_some() && next_id.eq_ignore_ascii_case(&current_entity.as_ref().unwrap().name)) 
+                            {
+                                if let Some(ent) = current_entity.take() {
+                                    self.entities.push(ent);
+                                }
+                                idx += 1;
+                            } else if next_id.eq_ignore_ascii_case("architecture") ||
+                                      next_id.eq_ignore_ascii_case("behavioral") ||
+                                      next_id.eq_ignore_ascii_case("structural") ||
+                                      next_id.eq_ignore_ascii_case("rtl") ||
+                                      (current_arch_name.is_some() && next_id.eq_ignore_ascii_case(current_arch_name.as_ref().unwrap()))
+                            {
+                                current_arch_entity_idx = None;
+                                current_arch_name = None;
+                                generate_stack.clear();
+                                idx += 1;
+                            } else if next_id.eq_ignore_ascii_case("generate") {
+                                // end generate
+                                let _ = generate_stack.pop();
+                                idx += 1;
+                            }
+                        } else if let TokenType::Symbol(sym) = &next_token.token_type {
+                             if sym == ";" {
+                                 // Simple `end;` -> usually ends entity if currently parsing one
+                                 if let Some(ent) = current_entity.take() {
+                                     self.entities.push(ent);
+                                 }
+                             }
+                        }
+                    }
+                }
+
+                // Port parsing inside Entity
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("port") => {
+                    if current_entity.is_some() && current_arch_entity_idx.is_none() {
+                        idx += 1;
+                        if let Some(paren_token) = tokens.get(idx) {
+                            if let TokenType::Symbol(sym) = &paren_token.token_type {
+                                if sym == "(" {
+                                    idx += 1;
+                                    // Parse ports until matched closing parenthesis
+                                    let mut paren_depth = 1;
+                                    let mut port_names = Vec::new();
+
+                                    while idx < tokens.len() && paren_depth > 0 {
+                                        // Collect port names separated by commas
+                                        port_names.clear();
+                                        while idx < tokens.len() {
+                                            if let TokenType::Identifier(p_name) = &tokens[idx].token_type {
+                                                port_names.push((p_name.clone(), tokens[idx].line));
+                                                idx += 1;
+                                                if let TokenType::Symbol(s) = &tokens[idx].token_type {
+                                                    if s == "," {
+                                                        idx += 1;
+                                                        continue;
+                                                    } else if s == ":" {
+                                                        idx += 1; // Consume colon
+                                                        break;
+                                                    }
+                                                }
+                                            } else {
+                                                idx += 1;
+                                            }
+                                        }
+
+                                        // Parse Direction (in, out, inout, etc.)
+                                        let mut mode = None;
+                                        if let TokenType::Identifier(m) = &tokens[idx].token_type {
+                                            mode = match m.to_lowercase().as_str() {
+                                                "in" => Some(PortMode::In),
+                                                "out" => Some(PortMode::Out),
+                                                "inout" => Some(PortMode::InOut),
+                                                "buffer" => Some(PortMode::Buffer),
+                                                "linkage" => Some(PortMode::Linkage),
+                                                _ => None,
+                                            };
+                                            if mode.is_some() { idx += 1; }
+                                        }
+
+                                        // Parse Data Type
+                                        let mut data_type = String::new();
+                                        let mut range: Option<Range> = None;
+
+                                        while idx < tokens.len() {
+                                            match &tokens[idx].token_type {
+                                                TokenType::Symbol(s) if s == ";" => {
+                                                    idx += 1; // Consume ;
+                                                    break; // End of this port declaration
+                                                }
+                                                TokenType::Symbol(s) if s == ":=" => {
+                                                    // Consume initialization completely
+                                                    while idx < tokens.len() {
+                                                        if let TokenType::Symbol(end_s) = &tokens[idx].token_type {
+                                                            if end_s == ";" || end_s == ")" {
+                                                                break;
+                                                            }
+                                                        }
+                                                        idx += 1;
+                                                    }
+                                                    continue;
+                                                }
+                                                TokenType::Symbol(s) if s == ")" => {
+                                                    paren_depth -= 1;
+                                                    if paren_depth == 0 {
+                                                        idx += 1; // Consume )
+                                                        break; // End of entire port block
+                                                    }
+                                                    data_type.push_str(s);
+                                                }
+                                                TokenType::Symbol(s) if s == "(" => {
+                                                    paren_depth += 1;
+                                                    
+                                                    // This might be the start of a range block e.g., (105 downto 0)
+                                                    let mut range_tokens = Vec::new();
+                                                    idx += 1;
+                                                    let mut inner_depth = 1;
+                                                    data_type.push_str("(");
+                                                    while idx < tokens.len() && inner_depth > 0 {
+                                                         match &tokens[idx].token_type {
+                                                             TokenType::Symbol(inner_s) if inner_s == "(" => {
+                                                                 inner_depth += 1;
+                                                             }
+                                                             TokenType::Symbol(inner_s) if inner_s == ")" => {
+                                                                 inner_depth -= 1;
+                                                             }
+                                                             _ => {}
+                                                         }
+                                                         
+                                                         if inner_depth > 0 {
+                                                             range_tokens.push(tokens[idx].clone());
+                                                             match &tokens[idx].token_type {
+                                                                 TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) | TokenType::StringLiteral(i) => {
+                                                                     data_type.push_str(i);
+                                                                     if !matches!(&tokens[idx].token_type, TokenType::Symbol(_)) {
+                                                                         data_type.push(' ');
+                                                                     }
+                                                                 }
+                                                                 _ => {}
+                                                             }
+                                                         } else {
+                                                             data_type = data_type.trim_end().to_string(); // remove trailing space before closing paren
+                                                             data_type.push_str(")");
+                                                         }
+                                                         idx += 1;
+                                                    }
+                                                    paren_depth -= 1; // We matched the closing paren of the range
+
+                                                    // Try reconstructing the range
+                                                    let mut r_left = String::new();
+                                                    let mut r_right = String::new();
+                                                    let mut r_dir = None;
+                                                    let mut hit_dir = false;
+
+                                                    for rt in &range_tokens {
+                                                        match &rt.token_type {
+                                                            TokenType::Identifier(dir) if dir.eq_ignore_ascii_case("downto") => {
+                                                                r_dir = Some(Direction::Downto);
+                                                                hit_dir = true;
+                                                            }
+                                                            TokenType::Identifier(dir) if dir.eq_ignore_ascii_case("to") => {
+                                                                r_dir = Some(Direction::To);
+                                                                hit_dir = true;
+                                                            }
+                                                            TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) | TokenType::StringLiteral(i) => {
+                                                                if hit_dir {
+                                                                    r_right.push_str(i);
+                                                                    r_right.push(' ');
+                                                                } else {
+                                                                    r_left.push_str(i);
+                                                                    r_left.push(' ');
+                                                                }
+                                                            }
+                                                            _ => {}
+                                                        }
+                                                    }
+
+                                                    if let Some(d) = r_dir {
+                                                        range = Some(Range {
+                                                            left: r_left.trim().to_string(),
+                                                            right: r_right.trim().to_string(),
+                                                            direction: d,
+                                                        });
+                                                    } else {
+                                                        // It was just a regular type parameter like std_logic_vector(0)
+                                                        data_type.push('(');
+                                                        for rt in range_tokens {
+                                                            if let TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) = rt.token_type {
+                                                                data_type.push_str(&i);
+                                                            }
+                                                        }
+                                                        data_type.push(')');
+                                                    }
+                                                    continue;
+                                                }
+                                                TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) => {
+                                                    data_type.push_str(i);
+                                                    data_type.push(' ');
+                                                }
+                                                _ => {}
+                                            }
+                                            idx += 1;
+                                        }
+
+                                        // Apply ports if valid
+                                        if let Some(valid_mode) = mode {
+                                            for (p_name, p_line) in &port_names {
+                                                if let Some(ent) = &mut current_entity {
+                                                    ent.ports.push(Port {
+                                                        name: p_name.clone(),
+                                                        mode: valid_mode.clone(),
+                                                        data_type: data_type.trim().to_string(),
+                                                        range: range.clone(),
+                                                        file_name: file_name.to_string(),
+                                                        line: *p_line,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Architecture Start
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("architecture") => {
+                    idx += 1;
+                    if let Some(name_token) = tokens.get(idx) {
+                        if let TokenType::Identifier(arch_name) = &name_token.token_type {
+                            current_arch_name = Some(arch_name.clone());
+                            // Skip name
+                            idx += 1;
+                            if let Some(of_token) = tokens.get(idx) {
+                                 if let TokenType::Identifier(of_id) = &of_token.token_type {
+                                     if of_id.eq_ignore_ascii_case("of") {
+                                         idx += 1;
+                                         if let Some(target_token) = tokens.get(idx) {
+                                              if let TokenType::Identifier(target_name) = &target_token.token_type {
+                                                  current_arch_entity_idx = self
+                                                      .entities
+                                                      .iter()
+                                                      .position(|e| e.name.eq_ignore_ascii_case(target_name));
+                                              }
+                                         }
+                                     }
+                                 }
+                            }
+                        }
+                    }
+                }
+
+                // Parse Signals inside Architecture
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("signal") || id.eq_ignore_ascii_case("constant") => {
+                    if let Some(arch_idx) = current_arch_entity_idx {
+                        idx += 1;
+                        let mut sig_names = Vec::new();
+
+                        // Collect names until ':'
+                        while idx < tokens.len() {
+                            if let TokenType::Identifier(sig) = &tokens[idx].token_type {
+                                sig_names.push((sig.clone(), tokens[idx].line));
+                            } else if let TokenType::Symbol(sym) = &tokens[idx].token_type {
+                                if sym == ":" {
+                                    idx += 1;
+                                    break;
+                                }
+                            }
+                            idx += 1;
+                        }
+
+                        // Collect type and range until ';' or ':='
+                        let mut data_type = String::new();
+                        let mut range: Option<Range> = None;
+                        
+                        while idx < tokens.len() {
+                            match &tokens[idx].token_type {
+                                TokenType::Symbol(s) if s == ";" => {
+                                    break;
+                                }
+                                TokenType::Symbol(s) if s == ":=" => {
+                                    // Consume initialization completely
+                                    while idx < tokens.len() {
+                                        if let TokenType::Symbol(end_s) = &tokens[idx].token_type {
+                                            if end_s == ";" { break; }
+                                        }
+                                        idx += 1;
+                                    }
+                                    break;
+                                }
+                                TokenType::Symbol(s) if s == "(" => {
+                                    // Range parsing block same as ports
+                                    let mut range_tokens = Vec::new();
+                                    idx += 1;
+                                    let mut inner_depth = 1;
+                                    data_type.push_str("(");
+                                    while idx < tokens.len() && inner_depth > 0 {
+                                         match &tokens[idx].token_type {
+                                             TokenType::Symbol(inner_s) if inner_s == "(" => {
+                                                 inner_depth += 1;
+                                             }
+                                             TokenType::Symbol(inner_s) if inner_s == ")" => {
+                                                 inner_depth -= 1;
+                                             }
+                                             _ => {}
+                                         }
+                                         
+                                         if inner_depth > 0 {
+                                             range_tokens.push(tokens[idx].clone());
+                                             match &tokens[idx].token_type {
+                                                 TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) | TokenType::StringLiteral(i) => {
+                                                     data_type.push_str(i);
+                                                     if !matches!(&tokens[idx].token_type, TokenType::Symbol(_)) {
+                                                         data_type.push(' ');
+                                                     }
+                                                 }
+                                                 _ => {}
+                                             }
+                                         } else {
+                                             data_type = data_type.trim_end().to_string(); // remove trailing space before closing paren
+                                             data_type.push_str(")");
+                                         }
+                                         idx += 1;
+                                    }
+                                    let mut r_left = String::new();
+                                    let mut r_right = String::new();
+                                    let mut r_dir = None;
+                                    let mut hit_dir = false;
+
+                                    for rt in &range_tokens {
+                                        match &rt.token_type {
+                                            TokenType::Identifier(dir) if dir.eq_ignore_ascii_case("downto") => {
+                                                r_dir = Some(Direction::Downto);
+                                                hit_dir = true;
+                                            }
+                                            TokenType::Identifier(dir) if dir.eq_ignore_ascii_case("to") => {
+                                                r_dir = Some(Direction::To);
+                                                hit_dir = true;
+                                            }
+                                            TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) | TokenType::StringLiteral(i) => {
+                                                if hit_dir {
+                                                    r_right.push_str(i);
+                                                    r_right.push(' ');
+                                                } else {
+                                                    r_left.push_str(i);
+                                                    r_left.push(' ');
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    if let Some(d) = r_dir {
+                                        range = Some(Range {
+                                            left: r_left.trim().to_string(),
+                                            right: r_right.trim().to_string(),
+                                            direction: d,
+                                        });
+                                    } else {
+                                        // It was just a regular type parameter like std_logic_vector(0)
+                                        data_type.push('(');
+                                        for rt in range_tokens {
+                                            if let TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) = rt.token_type {
+                                                data_type.push_str(&i);
+                                            }
+                                        }
+                                        data_type.push(')');
+                                    }
+                                    continue;
+                                }
+                                TokenType::Identifier(i) | TokenType::Number(i) | TokenType::StringLiteral(i) | TokenType::Symbol(i) => {
+                                    data_type.push_str(i);
+                                    if !matches!(&tokens[idx].token_type, TokenType::Symbol(_)) {
+                                        data_type.push(' ');
+                                    }
+                                }
+                                _ => {}
+                            }
+                            idx += 1;
+                        }
+
+                        for (s_name, s_line) in sig_names {
+                            self.entities[arch_idx].signals.push(Port {
+                                name: s_name,
+                                mode: PortMode::In, // dummy mode
+                                data_type: data_type.trim().to_string(),
+                                range: range.clone(),
+                                file_name: file_name.to_string(),
+                                line: s_line,
+                            });
+                        }
+                    }
+                }
+
+                // For logic tracking generate sizes
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("for") => {
+                    if let Some(arch_idx) = current_arch_entity_idx {
+                        // Skip variable name
+                        idx += 2; 
+                        if let Some(in_t) = tokens.get(idx) {
+                            if let TokenType::Identifier(in_id) = &in_t.token_type {
+                                if in_id.eq_ignore_ascii_case("in") {
+                                    idx += 1;
+                                    // Parse until `generate`
+                                    let mut range_str = String::new();
+                                    while idx < tokens.len() {
+                                        if let TokenType::Identifier(gen_id) = &tokens[idx].token_type {
+                                            if gen_id.eq_ignore_ascii_case("generate") {
+                                                let count = {
+                                                    let ent = &self.entities[arch_idx];
+                                                    parse_range_size(&range_str, Some(ent))
+                                                };
+                                                generate_stack.push(count);
+                                                break;
+                                            }
+                                        }
+                                        if let TokenType::Identifier(i) | TokenType::Number(i) | TokenType::Symbol(i) | TokenType::StringLiteral(i) = &tokens[idx].token_type {
+                                            if range_str.is_empty() {
+                                                range_str.push_str(i);
+                                            } else {
+                                                range_str.push(' ');
+                                                range_str.push_str(i);
+                                            }
+                                        }
+                                        idx += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Component Instantiation Mapping
+                TokenType::Symbol(sym) if sym == ":" => {
+                    if let Some(arch_idx) = current_arch_entity_idx {
+                        let start_idx = idx;
+                        // Look backwards to find the instance name
+                        let mut _inst_name = String::new();
+                        let inst_line = t.line;
+                        if idx > 0 {
+                            if let TokenType::Identifier(prev_id) = &tokens[idx - 1].token_type {
+                                _inst_name = prev_id.clone();
+                            }
+                        }
+
+                        // Look forwards to find what we are instantiating "entity work.X" or "Component_Name"
+                        idx += 1;
+                        let mut target_name = String::new();
+                        if let Some(next_t) = tokens.get(idx) {
+                            if let TokenType::Identifier(nid) = &next_t.token_type {
+                                if nid.eq_ignore_ascii_case("entity") {
+                                    idx += 1; // get the actual entity name
+                                    if let Some(tgt_t) = tokens.get(idx) {
+                                        if let TokenType::Identifier(t_id) = &tgt_t.token_type {
+                                            // Extract name stripping 'work.' prefix if exists
+                                            let mut t_name = t_id.clone();
+                                            if t_name.to_lowercase().starts_with("work.") {
+                                                t_name = t_name[5..].to_string();
+                                            }
+                                            target_name = t_name;
+                                        }
+                                    }
+                                } else {
+                                    // Normally just "Component_Name"
+                                    target_name = nid.clone();
+                                    // Ensure it handles generic/port map correctly
+                                    idx += 1;
+                                    if let Some(follow_t) = tokens.get(idx) {
+                                         if let TokenType::Identifier(fid) = &follow_t.token_type {
+                                              if fid.eq_ignore_ascii_case("generic") || fid.eq_ignore_ascii_case("port") {
+                                                    // Valid instantiation
+                                              } else {
+                                                  target_name.clear(); // Invalid structure
+                                              }
+                                         } else {
+                                              target_name.clear(); // Invalid structure
+                                         }
+                                    } else {
+                                         target_name.clear(); // Invalid structure
+                                    }
+                                }
+                            }
+                        }
+
+                        if !target_name.is_empty() {
+                            let mut port_map = HashMap::new();
+                            let mut local_idx = idx;
+                            let mut inside_map = false;
+                            while local_idx < tokens.len() {
+                                match &tokens[local_idx].token_type {
+                                    TokenType::Identifier(id) if id.eq_ignore_ascii_case("port") || id.eq_ignore_ascii_case("generic") => {
+                                        if let Some(next_t) = tokens.get(local_idx + 1) {
+                                            if let TokenType::Identifier(mid) = &next_t.token_type {
+                                                if mid.eq_ignore_ascii_case("map") {
+                                                    inside_map = true;
+                                                    local_idx += 2; // skip map
+                                                    if let Some(TokenType::Symbol(s)) = tokens.get(local_idx).map(|t| &t.token_type) {
+                                                        if s == "(" {
+                                                            local_idx += 1;
+                                                        }
+                                                    }
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    TokenType::Symbol(s) if s == ";" => {
+                                        break; // End of instantiation
+                                    }
+                                    TokenType::Symbol(s) if s == "=>" && inside_map => {
+                                        // Found mapping
+                                        let mut inner_port = String::new();
+                                        let mut rev_idx = local_idx;
+                                        let mut rev_paren_depth = 0;
+                                        while rev_idx > 0 {
+                                            rev_idx -= 1;
+                                            match &tokens[rev_idx].token_type {
+                                                TokenType::Symbol(sym) if sym == ")" => {
+                                                    rev_paren_depth += 1;
+                                                    inner_port.insert_str(0, sym);
+                                                }
+                                                TokenType::Symbol(sym) if sym == "(" => {
+                                                    if rev_paren_depth > 0 {
+                                                        rev_paren_depth -= 1;
+                                                        inner_port.insert_str(0, sym);
+                                                    } else {
+                                                        break; // We hit the opening paren of the overall port map list
+                                                    }
+                                                }
+                                                TokenType::Symbol(sym) if sym == "," => {
+                                                    if rev_paren_depth == 0 {
+                                                        break; // We hit the comma before our parameter
+                                                    } else {
+                                                        inner_port.insert_str(0, sym);
+                                                    }
+                                                }
+                                                TokenType::Identifier(i) | TokenType::Number(i) | TokenType::StringLiteral(i) | TokenType::Symbol(i) => {
+                                                    inner_port.insert_str(0, i);
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        inner_port = inner_port.trim().to_string();
+
+                                        let mut outer_map = String::new();
+                                        let mut search_idx = local_idx + 1;
+                                        let mut paren_depth = 0;
+                                        
+                                        while search_idx < tokens.len() {
+                                            match &tokens[search_idx].token_type {
+                                                TokenType::Symbol(sym) if sym == "(" => {
+                                                    paren_depth += 1;
+                                                    outer_map.push_str(sym);
+                                                }
+                                                TokenType::Symbol(sym) if sym == ")" => {
+                                                    if paren_depth == 0 {
+                                                        break; // end of map or end of instantiation block
+                                                    } else {
+                                                        paren_depth -= 1;
+                                                        outer_map.push_str(sym);
+                                                    }
+                                                }
+                                                TokenType::Symbol(sym) if sym == "," && paren_depth == 0 => {
+                                                    break;
+                                                }
+                                                TokenType::Identifier(i) | TokenType::Number(i) | TokenType::StringLiteral(i) | TokenType::Symbol(i) => {
+                                                    if !outer_map.is_empty() && !matches!(&tokens[search_idx].token_type, TokenType::Symbol(_)) {
+                                                        outer_map.push(' ');
+                                                    }
+                                                    outer_map.push_str(i);
+                                                }
+                                                _ => {}
+                                            }
+                                            search_idx += 1;
+                                        }
+
+                                        if !inner_port.is_empty() {
+                                            port_map.insert(inner_port, outer_map.trim().to_string());
+                                        }
+                                        
+                                        local_idx = search_idx; // Jump to `,` or `)`
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                                local_idx += 1;
+                            }
+                            
+                            idx = local_idx;
+
+                            let mut multiplier: usize = generate_stack.iter().product();
+                            if multiplier == 0 {
+                                multiplier = 1;
+                            }
+
+                            for _ in 0..multiplier {
+                                self.entities[arch_idx].instantiations.push(Instantiation {
+                                    entity_name: target_name.clone(),
+                                    ports: Vec::new(),
+                                    port_map: port_map.clone(),
+                                    file_name: file_name.to_string(),
+                                    line: inst_line,
+                                });
+                            }
+                        } else {
+                            // Rollback idx entirely since this wasn't an instantiation!
+                            idx = start_idx;
+                        }
+                    }
+                }
+                
+                _ => {}
+            }
+            idx += 1;
+        }
     }
 }
 
