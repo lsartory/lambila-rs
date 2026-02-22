@@ -27,15 +27,13 @@ fn parse_path(project: &mut VhdlProject, path: &Path, recursive: bool) {
                 parse_path(project, &entry.path(), recursive);
             }
         }
-    } else if path.is_file() {
-        if let Some(ext) = path.extension() {
-            if ext == "vhd" || ext == "vhdl" {
-                if let Err(e) = project.parse_file(path.to_str().unwrap()) {
-                    eprintln!("Error opening or parsing file {}: {}", path.display(), e);
-                    std::process::exit(1);
-                }
-            }
-        }
+    } else if path.is_file()
+        && let Some(ext) = path.extension().map(|ext| ext.to_ascii_lowercase())
+        && (ext == "vhd" || ext == "vhdl")
+        && let Err(e) = project.parse_file(path.to_str().unwrap())
+    {
+        eprintln!("Error opening or parsing file {}: {}", path.display(), e);
+        std::process::exit(1);
     }
 }
 
