@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead};
@@ -124,7 +125,7 @@ pub fn parse_range_size(range_expr: &str, entity: Option<&Entity>) -> usize {
     1
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub enum PortMode {
     In,
     Out,
@@ -133,20 +134,20 @@ pub enum PortMode {
     Linkage,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub enum Direction {
     To,
     Downto,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub struct Range {
     pub left: String,
-    pub right: String,
     pub direction: Direction,
+    pub right: String,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub struct Port {
     pub name: String,
     pub mode: PortMode,
@@ -156,10 +157,11 @@ pub struct Port {
     pub line: usize,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub struct Instantiation {
     pub entity_name: String,
     pub ports: Vec<Port>,
+    #[serde(skip_serializing)]
     pub port_map: HashMap<String, String>,
     pub file_name: String,
     pub line: usize,
@@ -180,7 +182,7 @@ pub struct Token {
     pub line: usize,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub struct Entity {
     pub name: String,
     pub ports: Vec<Port>,
@@ -190,6 +192,15 @@ pub struct Entity {
     pub instantiations: Vec<Instantiation>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct EntityNode {
+    pub id: String,
+    #[serde(flatten)]
+    pub entity: Entity,
+    pub children: Vec<EntityNode>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct VhdlProject {
     pub entities: Vec<Entity>,
 }
@@ -238,6 +249,63 @@ impl VhdlProject {
         self.parse_tokens(&tokens, file_name);
 
         Ok(())
+    }
+
+    pub fn export_json_tree(&self) -> Vec<EntityNode> {
+        let mut all_instantiated = Vec::new();
+        for entity in &self.entities {
+            for inst in &entity.instantiations {
+                if !all_instantiated.contains(&inst.entity_name.to_lowercase()) {
+                    all_instantiated.push(inst.entity_name.to_lowercase());
+                }
+            }
+        }
+
+        let mut root_nodes = Vec::new();
+        for (_idx, entity) in self.entities.iter().enumerate() {
+            if !all_instantiated.contains(&entity.name.to_lowercase()) {
+                let id = format!("{}", root_nodes.len() + 1);
+                root_nodes.push(self.build_entity_node(entity, &id, &mut Vec::new()));
+            }
+        }
+        root_nodes
+    }
+
+    fn build_entity_node<'a>(
+        &'a self,
+        entity: &'a Entity,
+        current_id: &str,
+        path: &mut Vec<&'a str>,
+    ) -> EntityNode {
+        if path.contains(&entity.name.as_str()) {
+            return EntityNode {
+                id: current_id.to_string(),
+                entity: entity.clone(),
+                children: Vec::new(),
+            };
+        }
+
+        path.push(&entity.name);
+
+        let mut children = Vec::new();
+        for (inst_idx, child_inst) in entity.instantiations.iter().enumerate() {
+            if let Some(child_ent) = self
+                .entities
+                .iter()
+                .find(|e| e.name.eq_ignore_ascii_case(&child_inst.entity_name))
+            {
+                let child_id = format!("{}.{}", current_id, inst_idx + 1);
+                children.push(self.build_entity_node(child_ent, &child_id, path));
+            }
+        }
+
+        path.pop();
+
+        EntityNode {
+            id: current_id.to_string(),
+            entity: entity.clone(),
+            children,
+        }
     }
 
     pub fn print_hierarchy(&self) {
@@ -438,8 +506,8 @@ impl VhdlProject {
                             if parts.len() == 2 {
                                 resolved_range = Some(Range {
                                     left: parts[0].trim().to_string(),
-                                    right: parts[1].trim().to_string(),
                                     direction: dir,
+                                    right: parts[1].trim().to_string(),
                                 });
                             }
                         }
@@ -865,6 +933,29 @@ impl VhdlProject {
                     }
                 }
 
+                // Skip generic declarations inside entities and components
+                TokenType::Identifier(id) if id.eq_ignore_ascii_case("generic") => {
+                    idx += 1;
+                    if let Some(paren_token) = tokens.get(idx)
+                        && let TokenType::Symbol(sym) = &paren_token.token_type
+                        && sym == "("
+                    {
+                        idx += 1;
+                        let mut paren_depth = 1;
+                        while idx < tokens.len() && paren_depth > 0 {
+                            if let TokenType::Symbol(s) = &tokens[idx].token_type {
+                                if s == "(" {
+                                    paren_depth += 1;
+                                } else if s == ")" {
+                                    paren_depth -= 1;
+                                }
+                            }
+                            idx += 1;
+                        }
+                    }
+                    continue;
+                }
+
                 // Port parsing inside Entity
                 TokenType::Identifier(id) if id.eq_ignore_ascii_case("port") => {
                     if current_entity.is_some() && current_arch_entity_idx.is_none() {
@@ -1033,8 +1124,8 @@ impl VhdlProject {
                                             if let Some(d) = r_dir {
                                                 range = Some(Range {
                                                     left: r_left.trim().to_string(),
-                                                    right: r_right.trim().to_string(),
                                                     direction: d,
+                                                    right: r_right.trim().to_string(),
                                                 });
                                             } else {
                                                 // It was just a regular type parameter like std_logic_vector(0)

@@ -45,5 +45,9 @@ fn main() {
         parse_path(&mut project, path, cli.recursive);
     }
 
-    project.print_hierarchy();
+    let tree = project.export_json_tree();
+    match serde_json::to_string_pretty(&tree) {
+        Ok(json) => println!("{}", json),
+        Err(e) => eprintln!("Failed to serialize to JSON: {}", e),
+    }
 }
