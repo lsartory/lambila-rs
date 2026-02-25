@@ -1,6 +1,6 @@
-//! # Lambila — VHDL Lexer Library
+//! # Lambila — VHDL Lexer & Parser Library
 //!
-//! A Rust library that lexes VHDL source into tokens, supporting
+//! A Rust library that lexes and parses VHDL source, supporting
 //! three language versions:
 //!
 //! - **VHDL-1987** (IEEE Std 1076-1987) — 81 keywords
@@ -11,7 +11,7 @@
 //! source, so files can be lexed without loading them entirely into
 //! memory.
 //!
-//! ## Usage
+//! ## Lexer Usage
 //!
 //! ```rust
 //! use lambila::{lex, VhdlVersion, TokenKind};
@@ -25,13 +25,27 @@
 //!
 //! assert!(result.errors.is_empty());
 //! ```
+//!
+//! ## Parser Usage
+//!
+//! ```rust
+//! use lambila::{parse, VhdlVersion};
+//!
+//! let source = "entity my_entity is end entity my_entity;";
+//! let result = parse(source, VhdlVersion::Vhdl1993);
+//!
+//! println!("{:#?}", result.design_file);
+//!
+//! assert!(result.errors.is_empty());
+//! ```
 
-mod keywords;
 mod lexer;
-mod token;
+mod parser;
 mod version;
 
-pub use token::{KeywordKind, LexResult, LexerError, Span, Token, TokenKind};
+pub use lexer::token::{KeywordKind, LexError, LexResult, Span, Token, TokenKind};
+pub use parser::ast;
+pub use parser::{ParseError, ParseResult};
 pub use version::VhdlVersion;
 
 /// Lex a VHDL source string into tokens.
@@ -93,4 +107,32 @@ pub fn lex_file<P: AsRef<std::path::Path>>(
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     Ok(lex_reader(reader, version))
+}
+
+/// Parse a VHDL source string into an AST.
+///
+/// This is a convenience wrapper that first lexes the source, then
+/// parses the resulting tokens.
+pub fn parse(source: &str, version: VhdlVersion) -> ParseResult {
+    let lex_result = lex(source, version);
+    parser::Parser::new(lex_result.tokens, version).parse()
+}
+
+/// Parse a VHDL source from any buffered reader.
+pub fn parse_reader<R: std::io::BufRead>(reader: R, version: VhdlVersion) -> ParseResult {
+    let lex_result = lex_reader(reader, version);
+    parser::Parser::new(lex_result.tokens, version).parse()
+}
+
+/// Read a VHDL file from disk, lex it, and parse the resulting tokens.
+///
+/// # Errors
+///
+/// Returns an [`std::io::Error`] if the file cannot be opened.
+pub fn parse_file<P: AsRef<std::path::Path>>(
+    path: P,
+    version: VhdlVersion,
+) -> std::io::Result<ParseResult> {
+    let lex_result = lex_file(path, version)?;
+    Ok(parser::Parser::new(lex_result.tokens, version).parse())
 }

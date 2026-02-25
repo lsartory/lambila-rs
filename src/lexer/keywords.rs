@@ -1,4 +1,4 @@
-use crate::token::{KeywordKind, TokenKind};
+use super::token::{KeywordKind, TokenKind};
 use crate::version::VhdlVersion;
 
 /// Look up whether `word` (case-insensitive) is a reserved keyword in the

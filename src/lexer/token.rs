@@ -24,20 +24,20 @@ pub struct Token {
 
 /// A lexer error with location information.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LexerError {
+pub struct LexError {
     /// Human-readable error message.
     pub message: String,
     /// Location of the error in the source.
     pub span: Span,
 }
 
-impl std::fmt::Display for LexerError {
+impl std::fmt::Display for LexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}: {}", self.span.line, self.span.col, self.message)
     }
 }
 
-impl std::error::Error for LexerError {}
+impl std::error::Error for LexError {}
 
 /// The result of lexing a VHDL source file.
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ pub struct LexResult {
     /// The tokens produced (always ends with `Eof`).
     pub tokens: Vec<Token>,
     /// Any errors encountered during lexing.
-    pub errors: Vec<LexerError>,
+    pub errors: Vec<LexError>,
 }
 
 /// All VHDL reserved keywords across all versions.

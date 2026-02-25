@@ -1,8 +1,11 @@
-use crate::keywords::lookup_keyword;
-use crate::token::{KeywordKind, LexResult, LexerError, Span, Token, TokenKind};
+pub mod keywords;
+pub mod token;
+
 use crate::version::VhdlVersion;
+use keywords::lookup_keyword;
 use std::collections::VecDeque;
 use std::io::BufRead;
+use token::{KeywordKind, LexError, LexResult, Span, Token, TokenKind};
 
 /// The VHDL lexer. Converts a stream of characters into a sequence of tokens.
 ///
@@ -21,7 +24,7 @@ pub struct Lexer<R: BufRead> {
     line: u32,
     col: u32,
     tokens: Vec<Token>,
-    errors: Vec<LexerError>,
+    errors: Vec<LexError>,
     /// Buffer for accumulating the text of the current token.
     current_text: String,
 }
@@ -148,7 +151,7 @@ impl<R: BufRead> Lexer<R> {
     }
 
     fn error(&mut self, message: &str, start: usize, end: usize, line: u32, col: u32) {
-        self.errors.push(LexerError {
+        self.errors.push(LexError {
             message: message.to_string(),
             span: Span {
                 start,
