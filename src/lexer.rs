@@ -1,5 +1,5 @@
 use crate::keywords::lookup_keyword;
-use crate::token::{LexResult, LexerError, Span, Token, TokenKind};
+use crate::token::{KeywordKind, LexResult, LexerError, Span, Token, TokenKind};
 use crate::version::VhdlVersion;
 use std::collections::VecDeque;
 use std::io::BufRead;
@@ -175,7 +175,7 @@ impl<R: BufRead> Lexer<R> {
                 TokenKind::Identifier
                     | TokenKind::ExtendedIdentifier
                     | TokenKind::RightParen
-                    | TokenKind::Kw_All
+                    | TokenKind::Keyword(KeywordKind::All)
                     | TokenKind::CharacterLiteral
             ) || prev.kind.is_keyword()
         } else {
@@ -844,13 +844,19 @@ mod tests {
     #[test]
     fn test_keyword_entity() {
         let kinds = token_kinds("ENTITY", VhdlVersion::Vhdl1987);
-        assert_eq!(kinds, vec![TokenKind::Kw_Entity, TokenKind::Eof]);
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Keyword(KeywordKind::Entity), TokenKind::Eof]
+        );
     }
 
     #[test]
     fn test_keyword_case_insensitive() {
         let kinds = token_kinds("entity", VhdlVersion::Vhdl1993);
-        assert_eq!(kinds, vec![TokenKind::Kw_Entity, TokenKind::Eof]);
+        assert_eq!(
+            kinds,
+            vec![TokenKind::Keyword(KeywordKind::Entity), TokenKind::Eof]
+        );
     }
 
     #[test]
@@ -859,7 +865,10 @@ mod tests {
         assert_eq!(kinds_87, vec![TokenKind::Identifier, TokenKind::Eof]);
 
         let kinds_93 = token_kinds("xnor", VhdlVersion::Vhdl1993);
-        assert_eq!(kinds_93, vec![TokenKind::Kw_Xnor, TokenKind::Eof]);
+        assert_eq!(
+            kinds_93,
+            vec![TokenKind::Keyword(KeywordKind::Xnor), TokenKind::Eof]
+        );
     }
 
     #[test]
@@ -997,7 +1006,7 @@ mod tests {
             vec![
                 TokenKind::Identifier,
                 TokenKind::Tick,
-                TokenKind::Kw_Range,
+                TokenKind::Keyword(KeywordKind::Range),
                 TokenKind::Eof,
             ]
         );
@@ -1023,11 +1032,11 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Kw_Entity,
+                TokenKind::Keyword(KeywordKind::Entity),
                 TokenKind::Identifier,
-                TokenKind::Kw_Is,
-                TokenKind::Kw_End,
-                TokenKind::Kw_Entity,
+                TokenKind::Keyword(KeywordKind::Is),
+                TokenKind::Keyword(KeywordKind::End),
+                TokenKind::Keyword(KeywordKind::Entity),
                 TokenKind::Identifier,
                 TokenKind::Semicolon,
                 TokenKind::Eof,

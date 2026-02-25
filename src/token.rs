@@ -48,13 +48,137 @@ pub struct LexResult {
     pub errors: Vec<LexerError>,
 }
 
-/// All possible token types in VHDL (across all versions).
+/// All VHDL reserved keywords across all versions.
 ///
-/// Keyword variants are prefixed with `Kw_`. Version-specific keywords
-/// are only emitted when lexing with the appropriate version; otherwise
-/// they are returned as `Identifier`.
+/// Version-specific keywords are only emitted when lexing with the
+/// appropriate version; otherwise they are returned as `Identifier`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
+pub enum KeywordKind {
+    // ── VHDL-87 keywords (81) ───────────────────────────────────────────
+    Abs,
+    Access,
+    After,
+    Alias,
+    All,
+    And,
+    Architecture,
+    Array,
+    Assert,
+    Attribute,
+    Begin,
+    Block,
+    Body,
+    Buffer,
+    Bus,
+    Case,
+    Component,
+    Configuration,
+    Constant,
+    Disconnect,
+    Downto,
+    Else,
+    Elsif,
+    End,
+    Entity,
+    Exit,
+    File,
+    For,
+    Function,
+    Generate,
+    Generic,
+    Guarded,
+    If,
+    In,
+    Inout,
+    Is,
+    Label,
+    Library,
+    Linkage,
+    Loop,
+    Map,
+    Mod,
+    Nand,
+    New,
+    Next,
+    Nor,
+    Not,
+    Null,
+    Of,
+    On,
+    Open,
+    Or,
+    Others,
+    Out,
+    Package,
+    Port,
+    Procedure,
+    Process,
+    Range,
+    Record,
+    Register,
+    Rem,
+    Report,
+    Return,
+    Select,
+    Severity,
+    Signal,
+    Subtype,
+    Then,
+    To,
+    Transport,
+    Type,
+    Units,
+    Until,
+    Use,
+    Variable,
+    Wait,
+    When,
+    While,
+    With,
+    Xor,
+
+    // ── VHDL-93 additions (+16) ─────────────────────────────────────────
+    Group,
+    Impure,
+    Inertial,
+    Literal,
+    Postponed,
+    Pure,
+    Reject,
+    Rol,
+    Ror,
+    Shared,
+    Sla,
+    Sll,
+    Sra,
+    Srl,
+    Unaffected,
+    Xnor,
+
+    // ── VHDL-2008 additions (+19) ───────────────────────────────────────
+    Assume,
+    AssumeGuarantee,
+    Context,
+    Cover,
+    Default,
+    Fairness,
+    Force,
+    Inherit,
+    Parameter,
+    Property,
+    Protected,
+    Release,
+    Restrict,
+    RestrictGuarantee,
+    Sequence,
+    Strong,
+    Vmode,
+    Vprop,
+    Vunit,
+}
+
+/// All possible token types in VHDL (across all versions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenKind {
     // ── Identifiers ─────────────────────────────────────────────────────
     /// A basic identifier: `letter { [ _ ] letter_or_digit }`
@@ -115,128 +239,9 @@ pub enum TokenKind {
     DoubleLess,    // <<
     DoubleGreater, // >>
 
-    // ── Keywords (all versions) ──────────────────────────────────────
-    // VHDL-87 (81 keywords)
-    Kw_Abs,
-    Kw_Access,
-    Kw_After,
-    Kw_Alias,
-    Kw_All,
-    Kw_And,
-    Kw_Architecture,
-    Kw_Array,
-    Kw_Assert,
-    Kw_Attribute,
-    Kw_Begin,
-    Kw_Block,
-    Kw_Body,
-    Kw_Buffer,
-    Kw_Bus,
-    Kw_Case,
-    Kw_Component,
-    Kw_Configuration,
-    Kw_Constant,
-    Kw_Disconnect,
-    Kw_Downto,
-    Kw_Else,
-    Kw_Elsif,
-    Kw_End,
-    Kw_Entity,
-    Kw_Exit,
-    Kw_File,
-    Kw_For,
-    Kw_Function,
-    Kw_Generate,
-    Kw_Generic,
-    Kw_Guarded,
-    Kw_If,
-    Kw_In,
-    Kw_Inout,
-    Kw_Is,
-    Kw_Label,
-    Kw_Library,
-    Kw_Linkage,
-    Kw_Loop,
-    Kw_Map,
-    Kw_Mod,
-    Kw_Nand,
-    Kw_New,
-    Kw_Next,
-    Kw_Nor,
-    Kw_Not,
-    Kw_Null,
-    Kw_Of,
-    Kw_On,
-    Kw_Open,
-    Kw_Or,
-    Kw_Others,
-    Kw_Out,
-    Kw_Package,
-    Kw_Port,
-    Kw_Procedure,
-    Kw_Process,
-    Kw_Range,
-    Kw_Record,
-    Kw_Register,
-    Kw_Rem,
-    Kw_Report,
-    Kw_Return,
-    Kw_Select,
-    Kw_Severity,
-    Kw_Signal,
-    Kw_Subtype,
-    Kw_Then,
-    Kw_To,
-    Kw_Transport,
-    Kw_Type,
-    Kw_Units,
-    Kw_Until,
-    Kw_Use,
-    Kw_Variable,
-    Kw_Wait,
-    Kw_When,
-    Kw_While,
-    Kw_With,
-    Kw_Xor,
-
-    // VHDL-93 additions (+16)
-    Kw_Group,
-    Kw_Impure,
-    Kw_Inertial,
-    Kw_Literal,
-    Kw_Postponed,
-    Kw_Pure,
-    Kw_Reject,
-    Kw_Rol,
-    Kw_Ror,
-    Kw_Shared,
-    Kw_Sla,
-    Kw_Sll,
-    Kw_Sra,
-    Kw_Srl,
-    Kw_Unaffected,
-    Kw_Xnor,
-
-    // VHDL-2008 additions (+19)
-    Kw_Assume,
-    Kw_AssumeGuarantee,
-    Kw_Context,
-    Kw_Cover,
-    Kw_Default,
-    Kw_Fairness,
-    Kw_Force,
-    Kw_Inherit,
-    Kw_Parameter,
-    Kw_Property,
-    Kw_Protected,
-    Kw_Release,
-    Kw_Restrict,
-    Kw_RestrictGuarantee,
-    Kw_Sequence,
-    Kw_Strong,
-    Kw_Vmode,
-    Kw_Vprop,
-    Kw_Vunit,
+    // ── Keywords ────────────────────────────────────────────────────────
+    /// A reserved keyword.
+    Keyword(KeywordKind),
 
     // ── Special ──────────────────────────────────────────────────────────
     /// End of file.
@@ -248,124 +253,6 @@ pub enum TokenKind {
 impl TokenKind {
     /// Returns `true` if this token kind is a keyword.
     pub fn is_keyword(self) -> bool {
-        matches!(
-            self,
-            TokenKind::Kw_Abs
-                | TokenKind::Kw_Access
-                | TokenKind::Kw_After
-                | TokenKind::Kw_Alias
-                | TokenKind::Kw_All
-                | TokenKind::Kw_And
-                | TokenKind::Kw_Architecture
-                | TokenKind::Kw_Array
-                | TokenKind::Kw_Assert
-                | TokenKind::Kw_Attribute
-                | TokenKind::Kw_Begin
-                | TokenKind::Kw_Block
-                | TokenKind::Kw_Body
-                | TokenKind::Kw_Buffer
-                | TokenKind::Kw_Bus
-                | TokenKind::Kw_Case
-                | TokenKind::Kw_Component
-                | TokenKind::Kw_Configuration
-                | TokenKind::Kw_Constant
-                | TokenKind::Kw_Disconnect
-                | TokenKind::Kw_Downto
-                | TokenKind::Kw_Else
-                | TokenKind::Kw_Elsif
-                | TokenKind::Kw_End
-                | TokenKind::Kw_Entity
-                | TokenKind::Kw_Exit
-                | TokenKind::Kw_File
-                | TokenKind::Kw_For
-                | TokenKind::Kw_Function
-                | TokenKind::Kw_Generate
-                | TokenKind::Kw_Generic
-                | TokenKind::Kw_Guarded
-                | TokenKind::Kw_If
-                | TokenKind::Kw_In
-                | TokenKind::Kw_Inout
-                | TokenKind::Kw_Is
-                | TokenKind::Kw_Label
-                | TokenKind::Kw_Library
-                | TokenKind::Kw_Linkage
-                | TokenKind::Kw_Loop
-                | TokenKind::Kw_Map
-                | TokenKind::Kw_Mod
-                | TokenKind::Kw_Nand
-                | TokenKind::Kw_New
-                | TokenKind::Kw_Next
-                | TokenKind::Kw_Nor
-                | TokenKind::Kw_Not
-                | TokenKind::Kw_Null
-                | TokenKind::Kw_Of
-                | TokenKind::Kw_On
-                | TokenKind::Kw_Open
-                | TokenKind::Kw_Or
-                | TokenKind::Kw_Others
-                | TokenKind::Kw_Out
-                | TokenKind::Kw_Package
-                | TokenKind::Kw_Port
-                | TokenKind::Kw_Procedure
-                | TokenKind::Kw_Process
-                | TokenKind::Kw_Range
-                | TokenKind::Kw_Record
-                | TokenKind::Kw_Register
-                | TokenKind::Kw_Rem
-                | TokenKind::Kw_Report
-                | TokenKind::Kw_Return
-                | TokenKind::Kw_Select
-                | TokenKind::Kw_Severity
-                | TokenKind::Kw_Signal
-                | TokenKind::Kw_Subtype
-                | TokenKind::Kw_Then
-                | TokenKind::Kw_To
-                | TokenKind::Kw_Transport
-                | TokenKind::Kw_Type
-                | TokenKind::Kw_Units
-                | TokenKind::Kw_Until
-                | TokenKind::Kw_Use
-                | TokenKind::Kw_Variable
-                | TokenKind::Kw_Wait
-                | TokenKind::Kw_When
-                | TokenKind::Kw_While
-                | TokenKind::Kw_With
-                | TokenKind::Kw_Xor
-                | TokenKind::Kw_Group
-                | TokenKind::Kw_Impure
-                | TokenKind::Kw_Inertial
-                | TokenKind::Kw_Literal
-                | TokenKind::Kw_Postponed
-                | TokenKind::Kw_Pure
-                | TokenKind::Kw_Reject
-                | TokenKind::Kw_Rol
-                | TokenKind::Kw_Ror
-                | TokenKind::Kw_Shared
-                | TokenKind::Kw_Sla
-                | TokenKind::Kw_Sll
-                | TokenKind::Kw_Sra
-                | TokenKind::Kw_Srl
-                | TokenKind::Kw_Unaffected
-                | TokenKind::Kw_Xnor
-                | TokenKind::Kw_Assume
-                | TokenKind::Kw_AssumeGuarantee
-                | TokenKind::Kw_Context
-                | TokenKind::Kw_Cover
-                | TokenKind::Kw_Default
-                | TokenKind::Kw_Fairness
-                | TokenKind::Kw_Force
-                | TokenKind::Kw_Inherit
-                | TokenKind::Kw_Parameter
-                | TokenKind::Kw_Property
-                | TokenKind::Kw_Protected
-                | TokenKind::Kw_Release
-                | TokenKind::Kw_Restrict
-                | TokenKind::Kw_RestrictGuarantee
-                | TokenKind::Kw_Sequence
-                | TokenKind::Kw_Strong
-                | TokenKind::Kw_Vmode
-                | TokenKind::Kw_Vprop
-                | TokenKind::Kw_Vunit
-        )
+        matches!(self, TokenKind::Keyword(_))
     }
 }

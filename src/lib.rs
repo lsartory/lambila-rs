@@ -31,7 +31,7 @@ mod lexer;
 mod token;
 mod version;
 
-pub use token::{LexResult, LexerError, Span, Token, TokenKind};
+pub use token::{KeywordKind, LexResult, LexerError, Span, Token, TokenKind};
 pub use version::VhdlVersion;
 
 /// Lex a VHDL source string into tokens.
