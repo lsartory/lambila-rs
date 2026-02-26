@@ -789,8 +789,48 @@ pub enum BinaryOp {
     Div,
     Mod,
     Rem,
-    // Miscellaneous
+    // Exponentiating
     Pow,
+}
+
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let op_str = match self {
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+            BinaryOp::Xor => "xor",
+            BinaryOp::Nand => "nand",
+            BinaryOp::Nor => "nor",
+            BinaryOp::Xnor => "xnor",
+            BinaryOp::Sll => "sll",
+            BinaryOp::Srl => "srl",
+            BinaryOp::Sla => "sla",
+            BinaryOp::Sra => "sra",
+            BinaryOp::Rol => "rol",
+            BinaryOp::Ror => "ror",
+            BinaryOp::Eq => "=",
+            BinaryOp::Neq => "/=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Lte => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Gte => ">=",
+            BinaryOp::MatchEq => "?=",
+            BinaryOp::MatchNeq => "?/=",
+            BinaryOp::MatchLt => "?<",
+            BinaryOp::MatchLte => "?<=",
+            BinaryOp::MatchGt => "?>",
+            BinaryOp::MatchGte => "?>=",
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Concat => "&",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Mod => "mod",
+            BinaryOp::Rem => "rem",
+            BinaryOp::Pow => "**",
+        };
+        write!(f, "{}", op_str)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -800,6 +840,19 @@ pub enum UnaryOp {
     Abs,
     Not,
     Condition, // ?? (VHDL-2008)
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let op_str = match self {
+            UnaryOp::Pos => "+",
+            UnaryOp::Neg => "-",
+            UnaryOp::Abs => "abs ",
+            UnaryOp::Not => "not ",
+            UnaryOp::Condition => "? ",
+        };
+        write!(f, "{}", op_str)
+    }
 }
 
 // ─── Names ───────────────────────────────────────────────────────────────

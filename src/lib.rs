@@ -38,7 +38,25 @@
 //!
 //! assert!(result.errors.is_empty());
 //! ```
+//!
+//! ## Exporter Usage
+//!
+//! ```rust
+//! use lambila::{parse, VhdlVersion};
+//! use lambila::exporter::Exporter;
+//!
+//! let source = "entity my_entity is end entity my_entity;";
+//! let result = parse(source, VhdlVersion::Vhdl1993);
+//!
+//! let mut output = Vec::new();
+//! let mut exporter = Exporter::new(&mut output);
+//! exporter.export_design_file(&result.design_file).unwrap();
+//!
+//! let formatted = String::from_utf8(output).unwrap();
+//! println!("{}", formatted);
+//! ```
 
+pub mod exporter;
 mod lexer;
 mod parser;
 mod version;
@@ -135,4 +153,32 @@ pub fn parse_file<P: AsRef<std::path::Path>>(
 ) -> std::io::Result<ParseResult> {
     let lex_result = lex_file(path, version)?;
     Ok(parser::Parser::new(lex_result.tokens, version).parse())
+}
+
+/// Parse a VHDL file and write the formatted AST back to the output path
+///
+/// # Errors
+/// Returns an [`std::io::Error`] if files cannot be opened or if writes fail.
+pub fn export_file<P: AsRef<std::path::Path>, O: AsRef<std::path::Path>>(
+    input_path: P,
+    output_path: O,
+    version: VhdlVersion,
+) -> std::io::Result<()> {
+    let parse_result = parse_file(input_path, version)?;
+    if !parse_result.errors.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} parse errors", parse_result.errors.len()),
+        ));
+    }
+
+    let file = std::fs::File::create(output_path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut exporter = exporter::Exporter::new(&mut writer);
+    exporter.export_design_file(&parse_result.design_file)?;
+
+    // Explicitly flush safely
+    use std::io::Write;
+    writer.flush()?;
+    Ok(())
 }
