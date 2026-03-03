@@ -2,7 +2,9 @@
 
 use super::common::*;
 use super::expression::Expression;
+use super::node::{AstNode, format_comma_separated};
 use super::type_def::{DiscreteRange, SubtypeIndication};
+use crate::parser::{Parser, ParseError};
 
 /// A VHDL name.
 ///
@@ -175,4 +177,287 @@ pub struct PathnameElement {
 pub struct FunctionCall {
     pub function_name: Box<Name>,
     pub parameters: Option<super::association::ActualParameterPart>,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for Name {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Name::Simple(n) => n.format(f, indent_level),
+            Name::OperatorSymbol(n) => n.format(f, indent_level),
+            Name::CharacterLiteral(c) => write!(f, "'{}'", c),
+            Name::Selected(n) => n.format(f, indent_level),
+            Name::Indexed(n) => n.format(f, indent_level),
+            Name::Slice(n) => n.format(f, indent_level),
+            Name::Attribute(n) => n.format(f, indent_level),
+            Name::External(n) => n.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for Prefix {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Prefix::Name(n) => n.format(f, indent_level),
+            Prefix::FunctionCall(fc) => fc.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for Suffix {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Suffix::SimpleName(n) => n.format(f, indent_level),
+            Suffix::CharacterLiteral(c) => write!(f, "'{}'", c),
+            Suffix::OperatorSymbol(n) => n.format(f, indent_level),
+            Suffix::All => write!(f, "all"),
+        }
+    }
+}
+
+impl AstNode for SelectedName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.prefix.format(f, indent_level)?;
+        write!(f, ".")?;
+        self.suffix.format(f, indent_level)
+    }
+}
+
+impl AstNode for IndexedName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.prefix.format(f, indent_level)?;
+        write!(f, "(")?;
+        format_comma_separated(&self.expressions, f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for SliceName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.prefix.format(f, indent_level)?;
+        write!(f, "(")?;
+        self.discrete_range.format(f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for AttributeDesignator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.name.format(f, indent_level)
+    }
+}
+
+impl AstNode for AttributeName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.prefix.format(f, indent_level)?;
+        if let Some(ref sig) = self.signature {
+            sig.format(f, indent_level)?;
+        }
+        write!(f, "'")?;
+        self.designator.format(f, indent_level)?;
+        if let Some(ref expr) = self.expression {
+            write!(f, "(")?;
+            expr.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ExternalName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            ExternalName::Constant(n) => n.format(f, indent_level),
+            ExternalName::Signal(n) => n.format(f, indent_level),
+            ExternalName::Variable(n) => n.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ExternalConstantName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "<< constant ")?;
+        self.pathname.format(f, indent_level)?;
+        write!(f, " : ")?;
+        self.subtype_indication.format(f, indent_level)?;
+        write!(f, " >>")
+    }
+}
+
+impl AstNode for ExternalSignalName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "<< signal ")?;
+        self.pathname.format(f, indent_level)?;
+        write!(f, " : ")?;
+        self.subtype_indication.format(f, indent_level)?;
+        write!(f, " >>")
+    }
+}
+
+impl AstNode for ExternalVariableName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "<< variable ")?;
+        self.pathname.format(f, indent_level)?;
+        write!(f, " : ")?;
+        self.subtype_indication.format(f, indent_level)?;
+        write!(f, " >>")
+    }
+}
+
+impl AstNode for ExternalPathname {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            ExternalPathname::Package(p) => p.format(f, indent_level),
+            ExternalPathname::Absolute(p) => p.format(f, indent_level),
+            ExternalPathname::Relative(p) => p.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for PackagePathname {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "@")?;
+        self.library_name.format(f, indent_level)?;
+        for pkg in &self.package_names {
+            write!(f, ".")?;
+            pkg.format(f, indent_level)?;
+        }
+        write!(f, ".")?;
+        self.object_name.format(f, indent_level)
+    }
+}
+
+impl AstNode for AbsolutePathname {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, ".")?;
+        self.partial.format(f, indent_level)
+    }
+}
+
+impl AstNode for RelativePathname {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for i in 0..self.up_count {
+            write!(f, "^")?;
+            if i < self.up_count - 1 {
+                write!(f, ".")?;
+            }
+        }
+        if self.up_count > 0 {
+            write!(f, ".")?;
+        }
+        self.partial.format(f, indent_level)
+    }
+}
+
+impl AstNode for PartialPathname {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for elem in &self.elements {
+            elem.format(f, indent_level)?;
+            write!(f, ".")?;
+        }
+        self.object_name.format(f, indent_level)
+    }
+}
+
+impl AstNode for PathnameElement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.name.format(f, indent_level)?;
+        if let Some(ref expr) = self.expression {
+            write!(f, "(")?;
+            expr.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for FunctionCall {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.function_name.format(f, indent_level)?;
+        if let Some(ref params) = self.parameters {
+            write!(f, "(")?;
+            params.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
 }

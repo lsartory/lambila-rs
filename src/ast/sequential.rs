@@ -3,7 +3,9 @@
 use super::common::*;
 use super::expression::*;
 use super::name::Name;
+use super::node::{format_comma_separated, format_lines, write_indent, AstNode};
 use super::type_def::DiscreteRange;
+use crate::parser::{ParseError, Parser};
 
 /// EBNF (VHDL-2008): `sequential_statement ::= wait_statement | assertion_statement
 ///     | report_statement | signal_assignment_statement | variable_assignment_statement
@@ -455,4 +457,864 @@ pub struct ReturnStatement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NullStatement {
     pub label: Option<Label>,
+}
+
+// ─── AstNode implementations ────────────────────────────────────────────
+
+impl AstNode for SequentialStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Wait(s) => s.format(f, indent_level),
+            Self::Assertion(s) => s.format(f, indent_level),
+            Self::Report(s) => s.format(f, indent_level),
+            Self::SignalAssignment(s) => s.format(f, indent_level),
+            Self::VariableAssignment(s) => s.format(f, indent_level),
+            Self::ProcedureCall(s) => s.format(f, indent_level),
+            Self::If(s) => s.format(f, indent_level),
+            Self::Case(s) => s.format(f, indent_level),
+            Self::Loop(s) => s.format(f, indent_level),
+            Self::Next(s) => s.format(f, indent_level),
+            Self::Exit(s) => s.format(f, indent_level),
+            Self::Return(s) => s.format(f, indent_level),
+            Self::Null(s) => s.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for SequenceOfStatements {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.statements, f, indent_level)
+    }
+}
+
+impl AstNode for WaitStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "wait")?;
+        if let Some(sensitivity) = &self.sensitivity_clause {
+            write!(f, " ")?;
+            sensitivity.format(f, indent_level)?;
+        }
+        if let Some(condition) = &self.condition_clause {
+            write!(f, " ")?;
+            condition.format(f, indent_level)?;
+        }
+        if let Some(timeout) = &self.timeout_clause {
+            write!(f, " ")?;
+            timeout.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for SensitivityClause {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "on ")?;
+        self.sensitivity_list.format(f, indent_level)
+    }
+}
+
+impl AstNode for SensitivityList {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_comma_separated(&self.signals, f, indent_level)
+    }
+}
+
+impl AstNode for ConditionClause {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "until ")?;
+        self.condition.format(f, indent_level)
+    }
+}
+
+impl AstNode for TimeoutClause {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "for ")?;
+        self.time_expression.format(f, indent_level)
+    }
+}
+
+impl AstNode for Assertion {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "assert ")?;
+        self.condition.format(f, indent_level)?;
+        if let Some(report) = &self.report {
+            write!(f, " report ")?;
+            report.format(f, indent_level)?;
+        }
+        if let Some(severity) = &self.severity {
+            write!(f, " severity ")?;
+            severity.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for AssertionStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        self.assertion.format(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ReportStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "report ")?;
+        self.report_expression.format(f, indent_level)?;
+        if let Some(severity) = &self.severity {
+            write!(f, " severity ")?;
+            severity.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for SignalAssignmentStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Simple { label, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(label) = label {
+                    label.format(f, indent_level)?;
+                    write!(f, " : ")?;
+                }
+                assignment.format(f, indent_level)?;
+                writeln!(f, ";")
+            }
+            Self::Conditional { label, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(label) = label {
+                    label.format(f, indent_level)?;
+                    write!(f, " : ")?;
+                }
+                assignment.format(f, indent_level)?;
+                writeln!(f, ";")
+            }
+            Self::Selected { label, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(label) = label {
+                    label.format(f, indent_level)?;
+                    write!(f, " : ")?;
+                }
+                assignment.format(f, indent_level)?;
+                writeln!(f, ";")
+            }
+        }
+    }
+}
+
+impl AstNode for SimpleSignalAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Waveform(a) => a.format(f, indent_level),
+            Self::Force(a) => a.format(f, indent_level),
+            Self::Release(a) => a.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for SimpleWaveformAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= ")?;
+        if let Some(delay) = &self.delay_mechanism {
+            delay.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.waveform.format(f, indent_level)
+    }
+}
+
+impl AstNode for SimpleForceAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= force ")?;
+        if let Some(mode) = &self.force_mode {
+            mode.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.expression.format(f, indent_level)
+    }
+}
+
+impl AstNode for SimpleReleaseAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= release")?;
+        if let Some(mode) = &self.force_mode {
+            write!(f, " ")?;
+            mode.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ConditionalSignalAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Waveform(a) => a.format(f, indent_level),
+            Self::Force(a) => a.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ConditionalWaveformAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= ")?;
+        if let Some(delay) = &self.delay_mechanism {
+            delay.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.conditional_waveforms.format(f, indent_level)
+    }
+}
+
+impl AstNode for ConditionalForceAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= force ")?;
+        if let Some(mode) = &self.force_mode {
+            mode.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.conditional_expressions.format(f, indent_level)
+    }
+}
+
+impl AstNode for SelectedSignalAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Waveform(a) => a.format(f, indent_level),
+            Self::Force(a) => a.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for SelectedWaveformAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "with ")?;
+        self.selector.format(f, indent_level)?;
+        write!(f, " select")?;
+        if self.matching {
+            write!(f, " ?")?;
+        }
+        write!(f, " ")?;
+        self.target.format(f, indent_level)?;
+        write!(f, " <= ")?;
+        if let Some(delay) = &self.delay_mechanism {
+            delay.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.selected_waveforms.format(f, indent_level)
+    }
+}
+
+impl AstNode for SelectedForceAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "with ")?;
+        self.selector.format(f, indent_level)?;
+        write!(f, " select")?;
+        if self.matching {
+            write!(f, " ?")?;
+        }
+        write!(f, " ")?;
+        self.target.format(f, indent_level)?;
+        write!(f, " <= force ")?;
+        if let Some(mode) = &self.force_mode {
+            mode.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.selected_expressions.format(f, indent_level)
+    }
+}
+
+impl AstNode for DelayMechanism {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Transport => write!(f, "transport"),
+            Self::Inertial { reject_time } => {
+                if let Some(time) = reject_time {
+                    write!(f, "reject ")?;
+                    time.format(f, indent_level)?;
+                    write!(f, " ")?;
+                }
+                write!(f, "inertial")
+            }
+        }
+    }
+}
+
+impl AstNode for Waveform {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Elements(elements) => format_comma_separated(elements, f, indent_level),
+            Self::Unaffected => write!(f, "unaffected"),
+        }
+    }
+}
+
+impl AstNode for WaveformElement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Value { expression, after } => {
+                expression.format(f, indent_level)?;
+                if let Some(after) = after {
+                    write!(f, " after ")?;
+                    after.format(f, indent_level)?;
+                }
+                Ok(())
+            }
+            Self::Null { after } => {
+                write!(f, "null")?;
+                if let Some(after) = after {
+                    write!(f, " after ")?;
+                    after.format(f, indent_level)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl AstNode for ConditionalWaveforms {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for (i, alt) in self.alternatives.iter().enumerate() {
+            if i > 0 {
+                write!(f, " else ")?;
+            }
+            alt.format(f, indent_level)?;
+        }
+        if let Some(else_wf) = &self.else_waveform {
+            write!(f, " else ")?;
+            else_wf.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ConditionalWaveformAlternative {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.waveform.format(f, indent_level)?;
+        write!(f, " when ")?;
+        self.condition.format(f, indent_level)
+    }
+}
+
+impl AstNode for SelectedWaveforms {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_comma_separated(&self.alternatives, f, indent_level)
+    }
+}
+
+impl AstNode for SelectedWaveformAlternative {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.waveform.format(f, indent_level)?;
+        write!(f, " when ")?;
+        self.choices.format(f, indent_level)
+    }
+}
+
+impl AstNode for ForceMode {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::In => write!(f, "in"),
+            Self::Out => write!(f, "out"),
+        }
+    }
+}
+
+impl AstNode for Target {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Name(name) => name.format(f, indent_level),
+            Self::Aggregate(agg) => agg.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for VariableAssignmentStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Simple { label, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(label) = label {
+                    label.format(f, indent_level)?;
+                    write!(f, " : ")?;
+                }
+                assignment.format(f, indent_level)?;
+                writeln!(f, ";")
+            }
+            Self::Conditional { label, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(label) = label {
+                    label.format(f, indent_level)?;
+                    write!(f, " : ")?;
+                }
+                assignment.format(f, indent_level)?;
+                writeln!(f, ";")
+            }
+            Self::Selected { label, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(label) = label {
+                    label.format(f, indent_level)?;
+                    write!(f, " : ")?;
+                }
+                assignment.format(f, indent_level)?;
+                writeln!(f, ";")
+            }
+        }
+    }
+}
+
+impl AstNode for SimpleVariableAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " := ")?;
+        self.expression.format(f, indent_level)
+    }
+}
+
+impl AstNode for ConditionalVariableAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " := ")?;
+        self.conditional_expressions.format(f, indent_level)
+    }
+}
+
+impl AstNode for SelectedVariableAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "with ")?;
+        self.selector.format(f, indent_level)?;
+        write!(f, " select")?;
+        if self.matching {
+            write!(f, " ?")?;
+        }
+        write!(f, " ")?;
+        self.target.format(f, indent_level)?;
+        write!(f, " := ")?;
+        self.selected_expressions.format(f, indent_level)
+    }
+}
+
+impl AstNode for ProcedureCall {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.procedure_name.format(f, indent_level)?;
+        if let Some(params) = &self.parameters {
+            write!(f, "(")?;
+            format_comma_separated(&params.elements, f, indent_level)?;
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ProcedureCallStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        self.procedure_call.format(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for IfStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "if ")?;
+        self.condition.format(f, indent_level)?;
+        writeln!(f, " then")?;
+        self.then_statements.format(f, indent_level + 1)?;
+        for branch in &self.elsif_branches {
+            write_indent(f, indent_level)?;
+            write!(f, "elsif ")?;
+            branch.condition.format(f, indent_level)?;
+            writeln!(f, " then")?;
+            branch.statements.format(f, indent_level + 1)?;
+        }
+        if let Some(else_stmts) = &self.else_statements {
+            write_indent(f, indent_level)?;
+            writeln!(f, "else")?;
+            else_stmts.format(f, indent_level + 1)?;
+        }
+        write_indent(f, indent_level)?;
+        write!(f, "end if")?;
+        if let Some(end_label) = &self.end_label {
+            write!(f, " ")?;
+            end_label.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ElsifBranch {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "elsif ")?;
+        self.condition.format(f, indent_level)?;
+        writeln!(f, " then")?;
+        self.statements.format(f, indent_level + 1)
+    }
+}
+
+impl AstNode for CaseStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "case")?;
+        if self.matching {
+            write!(f, " ?")?;
+        }
+        write!(f, " ")?;
+        self.expression.format(f, indent_level)?;
+        writeln!(f, " is")?;
+        for alt in &self.alternatives {
+            alt.format(f, indent_level + 1)?;
+        }
+        write_indent(f, indent_level)?;
+        write!(f, "end case")?;
+        if self.matching {
+            write!(f, " ?")?;
+        }
+        if let Some(end_label) = &self.end_label {
+            write!(f, " ")?;
+            end_label.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for CaseStatementAlternative {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "when ")?;
+        self.choices.format(f, indent_level)?;
+        writeln!(f, " =>")?;
+        self.statements.format(f, indent_level + 1)
+    }
+}
+
+impl AstNode for LoopStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        if let Some(scheme) = &self.iteration_scheme {
+            scheme.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        writeln!(f, "loop")?;
+        self.statements.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end loop")?;
+        if let Some(end_label) = &self.end_label {
+            write!(f, " ")?;
+            end_label.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for IterationScheme {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::While(cond) => {
+                write!(f, "while ")?;
+                cond.format(f, indent_level)
+            }
+            Self::For(spec) => {
+                write!(f, "for ")?;
+                spec.format(f, indent_level)
+            }
+        }
+    }
+}
+
+impl AstNode for ParameterSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.identifier.format(f, indent_level)?;
+        write!(f, " in ")?;
+        self.discrete_range.format(f, indent_level)
+    }
+}
+
+impl AstNode for NextStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "next")?;
+        if let Some(loop_label) = &self.loop_label {
+            write!(f, " ")?;
+            loop_label.format(f, indent_level)?;
+        }
+        if let Some(condition) = &self.condition {
+            write!(f, " when ")?;
+            condition.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ExitStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "exit")?;
+        if let Some(loop_label) = &self.loop_label {
+            write!(f, " ")?;
+            loop_label.format(f, indent_level)?;
+        }
+        if let Some(condition) = &self.condition {
+            write!(f, " when ")?;
+            condition.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ReturnStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        write!(f, "return")?;
+        if let Some(expr) = &self.expression {
+            write!(f, " ")?;
+            expr.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for NullStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(label) = &self.label {
+            label.format(f, indent_level)?;
+            write!(f, " : ")?;
+        }
+        writeln!(f, "null;")
+    }
 }

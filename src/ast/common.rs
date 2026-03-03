@@ -1,5 +1,8 @@
 //! Common building-block types used throughout the AST.
 
+use super::node::AstNode;
+use crate::parser::{Parser, ParseError};
+
 /// An identifier — either basic or extended (VHDL-93+).
 ///
 /// EBNF: `identifier ::= basic_identifier | extended_identifier`
@@ -89,4 +92,146 @@ pub enum Direction {
 pub enum Sign {
     Plus,
     Minus,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for Identifier {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            Identifier::Basic(s) => write!(f, "{}", s),
+            Identifier::Extended(s) => write!(f, "\\{}\\", s),
+        }
+    }
+}
+
+impl AstNode for IdentifierList {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for (i, id) in self.identifiers.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            id.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for Label {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.identifier.format(f, indent_level)
+    }
+}
+
+impl AstNode for SimpleName {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.identifier.format(f, indent_level)
+    }
+}
+
+impl AstNode for OperatorSymbol {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        write!(f, "\"{}\"", self.text)
+    }
+}
+
+impl AstNode for Designator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Designator::Identifier(id) => id.format(f, indent_level),
+            Designator::OperatorSymbol(op) => op.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for Signature {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "[")?;
+        for (i, param) in self.parameter_types.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            param.format(f, indent_level)?;
+        }
+        if let Some(ref ret) = self.return_type {
+            if !self.parameter_types.is_empty() {
+                write!(f, " ")?;
+            }
+            write!(f, "return ")?;
+            ret.format(f, indent_level)?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl AstNode for Mode {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            Mode::In => write!(f, "in"),
+            Mode::Out => write!(f, "out"),
+            Mode::InOut => write!(f, "inout"),
+            Mode::Buffer => write!(f, "buffer"),
+            Mode::Linkage => write!(f, "linkage"),
+        }
+    }
+}
+
+impl AstNode for Direction {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            Direction::To => write!(f, "to"),
+            Direction::Downto => write!(f, "downto"),
+        }
+    }
+}
+
+impl AstNode for Sign {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            Sign::Plus => write!(f, "+"),
+            Sign::Minus => write!(f, "-"),
+        }
+    }
 }

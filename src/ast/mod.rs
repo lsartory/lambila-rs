@@ -16,6 +16,8 @@
 //! This module contains **only data structures** — no parsing, lowering,
 //! or analysis logic.
 
+pub mod node;
+
 pub mod architecture;
 pub mod association;
 pub mod attribute;

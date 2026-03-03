@@ -2,7 +2,9 @@
 
 use super::common::*;
 use super::expression::{Condition, Expression};
+use super::node::{AstNode, write_indent, format_lines};
 use super::sequential::*;
+use crate::parser::{Parser, ParseError};
 
 /// EBNF (VHDL-2008): `concurrent_statement ::= block_statement | process_statement
 ///     | concurrent_procedure_call_statement | concurrent_assertion_statement
@@ -259,4 +261,401 @@ pub struct ConcurrentSelectedSignalAssignment {
 pub struct Options {
     pub guarded: bool,
     pub delay_mechanism: Option<DelayMechanism>,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for ConcurrentStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Block(inner) => inner.format(f, indent_level),
+            Self::Process(inner) => inner.format(f, indent_level),
+            Self::ProcedureCall(inner) => inner.format(f, indent_level),
+            Self::Assertion(inner) => inner.format(f, indent_level),
+            Self::SignalAssignment(inner) => inner.format(f, indent_level),
+            Self::ComponentInstantiation(inner) => inner.format(f, indent_level),
+            Self::Generate(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for BlockStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        self.label.format(f, 0)?;
+        write!(f, " : block")?;
+        if let Some(ref guard) = self.guard_condition {
+            write!(f, " (")?;
+            guard.format(f, 0)?;
+            write!(f, ")")?;
+        }
+        writeln!(f, " is")?;
+        self.header.format(f, indent_level + 1)?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        writeln!(f, "begin")?;
+        self.statement_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end block")?;
+        if let Some(ref end_label) = self.end_label {
+            write!(f, " ")?;
+            end_label.format(f, 0)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for BlockHeader {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(ref gc) = self.generic_clause {
+            gc.format(f, indent_level)?;
+        }
+        if let Some(ref gma) = self.generic_map_aspect {
+            gma.format(f, indent_level)?;
+        }
+        if let Some(ref pc) = self.port_clause {
+            pc.format(f, indent_level)?;
+        }
+        if let Some(ref pma) = self.port_map_aspect {
+            pma.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for BlockDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for BlockDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramBody(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageBody(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::SignalDeclaration(inner) => inner.format(f, indent_level),
+            Self::SharedVariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::ComponentDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::ConfigurationSpecification(inner) => inner.format(f, indent_level),
+            Self::DisconnectionSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for BlockStatementPart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.statements, f, indent_level)
+    }
+}
+
+impl AstNode for ProcessStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(ref label) = self.label {
+            label.format(f, 0)?;
+            write!(f, " : ")?;
+        }
+        if self.postponed {
+            write!(f, "postponed ")?;
+        }
+        write!(f, "process")?;
+        if let Some(ref sensitivity) = self.sensitivity_list {
+            write!(f, " (")?;
+            sensitivity.format(f, 0)?;
+            write!(f, ")")?;
+        }
+        writeln!(f, " is")?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        writeln!(f, "begin")?;
+        self.statement_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end")?;
+        if self.postponed {
+            write!(f, " postponed")?;
+        }
+        write!(f, " process")?;
+        if let Some(ref end_label) = self.end_label {
+            write!(f, " ")?;
+            end_label.format(f, 0)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ProcessSensitivityList {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::All => write!(f, "all"),
+            Self::List(list) => list.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ProcessDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for ProcessDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramBody(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageBody(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::VariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ProcessStatementPart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.statements, f, indent_level)
+    }
+}
+
+impl AstNode for ConcurrentAssertionStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(ref label) = self.label {
+            label.format(f, 0)?;
+            write!(f, " : ")?;
+        }
+        if self.postponed {
+            write!(f, "postponed ")?;
+        }
+        self.assertion.format(f, 0)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ConcurrentProcedureCallStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(ref label) = self.label {
+            label.format(f, 0)?;
+            write!(f, " : ")?;
+        }
+        if self.postponed {
+            write!(f, "postponed ")?;
+        }
+        self.procedure_call.format(f, 0)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ConcurrentSignalAssignmentStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Simple { label, postponed, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(l) = label {
+                    l.format(f, 0)?;
+                    write!(f, " : ")?;
+                }
+                if *postponed {
+                    write!(f, "postponed ")?;
+                }
+                assignment.format(f, 0)?;
+                writeln!(f)
+            }
+            Self::Conditional { label, postponed, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(l) = label {
+                    l.format(f, 0)?;
+                    write!(f, " : ")?;
+                }
+                if *postponed {
+                    write!(f, "postponed ")?;
+                }
+                assignment.format(f, 0)?;
+                writeln!(f)
+            }
+            Self::Selected { label, postponed, assignment } => {
+                write_indent(f, indent_level)?;
+                if let Some(l) = label {
+                    l.format(f, 0)?;
+                    write!(f, " : ")?;
+                }
+                if *postponed {
+                    write!(f, "postponed ")?;
+                }
+                assignment.format(f, 0)?;
+                writeln!(f)
+            }
+        }
+    }
+}
+
+impl AstNode for ConcurrentSimpleSignalAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= ")?;
+        if self.guarded {
+            write!(f, "guarded ")?;
+        }
+        if let Some(ref delay) = self.delay_mechanism {
+            delay.format(f, 0)?;
+            write!(f, " ")?;
+        }
+        self.waveform.format(f, 0)?;
+        write!(f, ";")
+    }
+}
+
+impl AstNode for ConcurrentConditionalSignalAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.target.format(f, indent_level)?;
+        write!(f, " <= ")?;
+        if self.guarded {
+            write!(f, "guarded ")?;
+        }
+        if let Some(ref delay) = self.delay_mechanism {
+            delay.format(f, 0)?;
+            write!(f, " ")?;
+        }
+        self.conditional_waveforms.format(f, 0)?;
+        write!(f, ";")
+    }
+}
+
+impl AstNode for ConcurrentSelectedSignalAssignment {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "with ")?;
+        self.selector.format(f, indent_level)?;
+        write!(f, " select")?;
+        if self.matching {
+            write!(f, " ?")?;
+        }
+        write!(f, " ")?;
+        self.target.format(f, 0)?;
+        write!(f, " <= ")?;
+        if self.guarded {
+            write!(f, "guarded ")?;
+        }
+        if let Some(ref delay) = self.delay_mechanism {
+            delay.format(f, 0)?;
+            write!(f, " ")?;
+        }
+        self.selected_waveforms.format(f, 0)?;
+        write!(f, ";")
+    }
+}
+
+impl AstNode for Options {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        if self.guarded {
+            write!(f, "guarded")?;
+        }
+        if let Some(ref delay) = self.delay_mechanism {
+            if self.guarded {
+                write!(f, " ")?;
+            }
+            delay.format(f, 0)?;
+        }
+        Ok(())
+    }
 }

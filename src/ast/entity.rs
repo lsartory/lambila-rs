@@ -1,6 +1,8 @@
 //! Entity declaration AST nodes.
 
 use super::common::*;
+use super::node::{AstNode, write_indent, format_lines};
+use crate::parser::{Parser, ParseError};
 
 /// EBNF (VHDL-2008): `entity_declaration ::= ENTITY identifier IS entity_header
 ///     entity_declarative_part [ BEGIN entity_statement_part ] END [ ENTITY ]
@@ -82,4 +84,115 @@ pub enum EntityStatement {
     ConcurrentAssertion(Box<super::concurrent::ConcurrentAssertionStatement>),
     PassiveProcedureCall(Box<super::concurrent::ConcurrentProcedureCallStatement>),
     PassiveProcess(Box<super::concurrent::ProcessStatement>),
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for EntityDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "entity ")?;
+        self.identifier.format(f, 0)?;
+        writeln!(f, " is")?;
+        self.header.format(f, indent_level + 1)?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        if let Some(ref stmt_part) = self.statement_part {
+            write_indent(f, indent_level)?;
+            writeln!(f, "begin")?;
+            stmt_part.format(f, indent_level + 1)?;
+        }
+        write_indent(f, indent_level)?;
+        write!(f, "end entity")?;
+        if let Some(ref name) = self.end_name {
+            write!(f, " ")?;
+            name.format(f, 0)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for EntityHeader {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(ref gc) = self.generic_clause {
+            gc.format(f, indent_level)?;
+        }
+        if let Some(ref pc) = self.port_clause {
+            pc.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for EntityDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for EntityDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramBody(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageBody(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::SignalDeclaration(inner) => inner.format(f, indent_level),
+            Self::SharedVariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::DisconnectionSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for EntityStatementPart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.statements, f, indent_level)
+    }
+}
+
+impl AstNode for EntityStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::ConcurrentAssertion(inner) => inner.format(f, indent_level),
+            Self::PassiveProcedureCall(inner) => inner.format(f, indent_level),
+            Self::PassiveProcess(inner) => inner.format(f, indent_level),
+        }
+    }
 }

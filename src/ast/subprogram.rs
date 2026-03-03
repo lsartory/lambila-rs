@@ -3,7 +3,9 @@
 use super::common::*;
 use super::interface::GenericMapAspect;
 use super::name::Name;
+use super::node::{AstNode, write_indent, format_lines};
 use super::type_def::TypeMark;
+use crate::parser::{Parser, ParseError};
 
 /// EBNF: `subprogram_declaration ::= subprogram_specification ;`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,4 +134,215 @@ pub struct SubprogramInstantiationDeclaration {
     pub subprogram_name: Box<Name>,
     pub signature: Option<Signature>,
     pub generic_map_aspect: Option<GenericMapAspect>,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for SubprogramDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        self.specification.format(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for SubprogramBody {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        self.specification.format(f, indent_level)?;
+        writeln!(f, " is")?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        writeln!(f, "begin")?;
+        self.statement_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end")?;
+        if let Some(kind) = &self.end_kind {
+            write!(f, " ")?;
+            kind.format(f, indent_level)?;
+        }
+        if let Some(desig) = &self.end_designator {
+            write!(f, " ")?;
+            desig.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for SubprogramSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            SubprogramSpecification::Procedure(spec) => spec.format(f, indent_level),
+            SubprogramSpecification::Function(spec) => spec.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ProcedureSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "procedure ")?;
+        self.designator.format(f, indent_level)?;
+        if let Some(header) = &self.header {
+            write!(f, " ")?;
+            header.format(f, indent_level)?;
+        }
+        if self.has_parameter_keyword {
+            write!(f, " parameter")?;
+        }
+        if let Some(params) = &self.parameter_list {
+            write!(f, " (")?;
+            params.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for FunctionSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(purity) = &self.purity {
+            purity.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        write!(f, "function ")?;
+        self.designator.format(f, indent_level)?;
+        if let Some(header) = &self.header {
+            write!(f, " ")?;
+            header.format(f, indent_level)?;
+        }
+        if self.has_parameter_keyword {
+            write!(f, " parameter")?;
+        }
+        if let Some(params) = &self.parameter_list {
+            write!(f, " (")?;
+            params.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        write!(f, " return ")?;
+        self.return_type.format(f, indent_level)
+    }
+}
+
+impl AstNode for SubprogramHeader {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "generic (")?;
+        self.generic_list.format(f, indent_level)?;
+        write!(f, ")")?;
+        if let Some(generic_map) = &self.generic_map_aspect {
+            write!(f, " ")?;
+            generic_map.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for SubprogramKind {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            SubprogramKind::Procedure => write!(f, "procedure"),
+            SubprogramKind::Function => write!(f, "function"),
+        }
+    }
+}
+
+impl AstNode for SubprogramDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for SubprogramDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramBody(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageBody(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::VariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for SubprogramStatementPart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.statements, f, indent_level)
+    }
+}
+
+impl AstNode for SubprogramInstantiationDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        self.kind.format(f, indent_level)?;
+        write!(f, " ")?;
+        self.identifier.format(f, indent_level)?;
+        write!(f, " is new ")?;
+        self.subprogram_name.format(f, indent_level)?;
+        if let Some(sig) = &self.signature {
+            write!(f, " ")?;
+            sig.format(f, indent_level)?;
+        }
+        if let Some(generic_map) = &self.generic_map_aspect {
+            write!(f, " ")?;
+            generic_map.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
 }

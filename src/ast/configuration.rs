@@ -3,6 +3,8 @@
 use super::common::*;
 use super::expression::Expression;
 use super::name::Name;
+use super::node::{AstNode, format_comma_separated, format_lines, write_indent};
+use crate::parser::{ParseError, Parser};
 
 /// EBNF (VHDL-2008): `configuration_declaration ::= CONFIGURATION identifier OF entity_name IS
 ///     configuration_declarative_part { verification_unit_binding_indication ; }
@@ -172,4 +174,316 @@ pub enum InstantiationList {
     Labels(Vec<Label>),
     Others,
     All,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for ConfigurationDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "configuration ")?;
+        self.identifier.format(f, indent_level)?;
+        write!(f, " of ")?;
+        self.entity_name.format(f, indent_level)?;
+        writeln!(f, " is")?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        for vu in &self.verification_units {
+            vu.format(f, indent_level + 1)?;
+            writeln!(f, ";")?;
+        }
+        self.block_configuration.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end configuration")?;
+        if let Some(ref name) = self.end_name {
+            write!(f, " ")?;
+            name.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ConfigurationDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for ConfigurationDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            ConfigurationDeclarativeItem::UseClause(uc) => uc.format(f, indent_level),
+            ConfigurationDeclarativeItem::AttributeSpecification(attr) => {
+                attr.format(f, indent_level)
+            }
+            ConfigurationDeclarativeItem::GroupDeclaration(grp) => grp.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ConfigurationItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            ConfigurationItem::Block(bc) => bc.format(f, indent_level),
+            ConfigurationItem::Component(cc) => cc.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ConfigurationSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            ConfigurationSpecification::Simple(s) => s.format(f, indent_level),
+            ConfigurationSpecification::Compound(c) => c.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for SimpleConfigurationSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "for ")?;
+        self.component_spec.format(f, indent_level)?;
+        writeln!(f)?;
+        self.binding.format(f, indent_level + 1)?;
+        writeln!(f, ";")?;
+        if self.has_end_for {
+            write_indent(f, indent_level)?;
+            writeln!(f, "end for;")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for CompoundConfigurationSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "for ")?;
+        self.component_spec.format(f, indent_level)?;
+        writeln!(f)?;
+        self.binding.format(f, indent_level + 1)?;
+        writeln!(f, ";")?;
+        for vu in &self.verification_units {
+            vu.format(f, indent_level + 1)?;
+            writeln!(f, ";")?;
+        }
+        write_indent(f, indent_level)?;
+        writeln!(f, "end for;")
+    }
+}
+
+impl AstNode for BlockConfiguration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "for ")?;
+        self.block_spec.format(f, indent_level)?;
+        writeln!(f)?;
+        format_lines(&self.use_clauses, f, indent_level + 1)?;
+        format_lines(&self.items, f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        writeln!(f, "end for;")
+    }
+}
+
+impl AstNode for BlockSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            BlockSpecification::Architecture(name) => name.format(f, indent_level),
+            BlockSpecification::Block(label) => label.format(f, indent_level),
+            BlockSpecification::Generate {
+                label,
+                specification,
+            } => {
+                label.format(f, indent_level)?;
+                if let Some(spec) = specification {
+                    write!(f, "(")?;
+                    spec.format(f, indent_level)?;
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl AstNode for GenerateOrIndexSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            GenerateOrIndexSpecification::DiscreteRange(dr) => dr.format(f, indent_level),
+            GenerateOrIndexSpecification::Expression(expr) => expr.format(f, indent_level),
+            GenerateOrIndexSpecification::AlternativeLabel(label) => label.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ComponentConfiguration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "for ")?;
+        self.component_spec.format(f, indent_level)?;
+        writeln!(f)?;
+        if let Some(ref binding) = self.binding {
+            binding.format(f, indent_level + 1)?;
+            writeln!(f, ";")?;
+        }
+        for vu in &self.verification_units {
+            vu.format(f, indent_level + 1)?;
+            writeln!(f, ";")?;
+        }
+        if let Some(ref bc) = self.block_configuration {
+            bc.format(f, indent_level + 1)?;
+        }
+        write_indent(f, indent_level)?;
+        writeln!(f, "end for;")
+    }
+}
+
+impl AstNode for ComponentSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.instantiation_list.format(f, indent_level)?;
+        write!(f, " : ")?;
+        self.component_name.format(f, indent_level)
+    }
+}
+
+impl AstNode for BindingIndication {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(ref ea) = self.entity_aspect {
+            write_indent(f, indent_level)?;
+            write!(f, "use ")?;
+            ea.format(f, indent_level)?;
+            writeln!(f)?;
+        }
+        if let Some(ref gm) = self.generic_map_aspect {
+            gm.format(f, indent_level)?;
+        }
+        if let Some(ref pm) = self.port_map_aspect {
+            pm.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for EntityAspect {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            EntityAspect::Entity {
+                entity_name,
+                architecture,
+            } => {
+                write!(f, "entity ")?;
+                entity_name.format(f, indent_level)?;
+                if let Some(arch) = architecture {
+                    write!(f, "(")?;
+                    arch.format(f, indent_level)?;
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            EntityAspect::Configuration(name) => {
+                write!(f, "configuration ")?;
+                name.format(f, indent_level)
+            }
+            EntityAspect::Open => write!(f, "open"),
+        }
+    }
+}
+
+impl AstNode for VerificationUnitBindingIndication {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "use vunit ")?;
+        self.unit_list.format(f, indent_level)
+    }
+}
+
+impl AstNode for VerificationUnitList {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for (i, name) in self.names.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            name.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for InstantiationList {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            InstantiationList::Labels(labels) => format_comma_separated(labels, f, indent_level),
+            InstantiationList::Others => write!(f, "others"),
+            InstantiationList::All => write!(f, "all"),
+        }
+    }
 }

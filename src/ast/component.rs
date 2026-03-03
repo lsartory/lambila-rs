@@ -2,6 +2,8 @@
 
 use super::common::*;
 use super::name::Name;
+use super::node::{AstNode, write_indent};
+use crate::parser::{Parser, ParseError};
 
 /// EBNF (VHDL-2008): `component_declaration ::= COMPONENT identifier [ IS ]
 ///     [ local_generic_clause ] [ local_port_clause ] END COMPONENT [ component_simple_name ] ;`
@@ -43,4 +45,87 @@ pub enum InstantiatedUnit {
     },
     /// VHDL-93+.
     Configuration(Box<Name>),
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for ComponentDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "component ")?;
+        self.identifier.format(f, 0)?;
+        writeln!(f, " is")?;
+        if let Some(ref gc) = self.generic_clause {
+            gc.format(f, indent_level + 1)?;
+        }
+        if let Some(ref pc) = self.port_clause {
+            pc.format(f, indent_level + 1)?;
+        }
+        write_indent(f, indent_level)?;
+        write!(f, "end component")?;
+        if let Some(ref name) = self.end_name {
+            write!(f, " ")?;
+            name.format(f, 0)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for ComponentInstantiationStatement {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        self.label.format(f, 0)?;
+        write!(f, " : ")?;
+        self.unit.format(f, 0)?;
+        writeln!(f)?;
+        if let Some(ref gma) = self.generic_map_aspect {
+            gma.format(f, indent_level + 1)?;
+        }
+        if let Some(ref pma) = self.port_map_aspect {
+            pma.format(f, indent_level + 1)?;
+        }
+        write_indent(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for InstantiatedUnit {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            InstantiatedUnit::Component { has_component_keyword, name } => {
+                if *has_component_keyword {
+                    write!(f, "component ")?;
+                }
+                name.format(f, indent_level)
+            }
+            InstantiatedUnit::Entity { name, architecture } => {
+                write!(f, "entity ")?;
+                name.format(f, indent_level)?;
+                if let Some(arch) = architecture {
+                    write!(f, "(")?;
+                    arch.format(f, 0)?;
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
+            InstantiatedUnit::Configuration(name) => {
+                write!(f, "configuration ")?;
+                name.format(f, indent_level)
+            }
+        }
+    }
 }

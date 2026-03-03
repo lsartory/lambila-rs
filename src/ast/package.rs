@@ -3,6 +3,8 @@
 use super::common::*;
 use super::interface::GenericMapAspect;
 use super::name::Name;
+use super::node::{AstNode, write_indent, format_lines};
+use crate::parser::{Parser, ParseError};
 
 /// EBNF (VHDL-2008): `package_declaration ::= PACKAGE identifier IS package_header
 ///     package_declarative_part END [ PACKAGE ] [ package_simple_name ] ;`
@@ -129,4 +131,168 @@ pub struct PackageInstantiationDeclaration {
     pub identifier: Identifier,
     pub package_name: Box<Name>,
     pub generic_map_aspect: Option<GenericMapAspect>,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for PackageDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "package ")?;
+        self.identifier.format(f, indent_level)?;
+        writeln!(f, " is")?;
+        if let Some(header) = &self.header {
+            header.format(f, indent_level + 1)?;
+        }
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end package")?;
+        if let Some(end_name) = &self.end_name {
+            write!(f, " ")?;
+            end_name.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for PackageHeader {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(generic_clause) = &self.generic_clause {
+            generic_clause.format(f, indent_level)?;
+        }
+        if let Some(generic_map_aspect) = &self.generic_map_aspect {
+            generic_map_aspect.format(f, indent_level)?;
+            writeln!(f, ";")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for PackageDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for PackageDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::SignalDeclaration(inner) => inner.format(f, indent_level),
+            Self::SharedVariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::VariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::ComponentDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::DisconnectionSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for PackageBody {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "package body ")?;
+        self.name.format(f, indent_level)?;
+        writeln!(f, " is")?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end package body")?;
+        if let Some(end_name) = &self.end_name {
+            write!(f, " ")?;
+            end_name.format(f, indent_level)?;
+        }
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for PackageBodyDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for PackageBodyDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramBody(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageBody(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::SharedVariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::VariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for PackageInstantiationDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "package ")?;
+        self.identifier.format(f, indent_level)?;
+        write!(f, " is new ")?;
+        self.package_name.format(f, indent_level)?;
+        if let Some(generic_map) = &self.generic_map_aspect {
+            writeln!(f)?;
+            generic_map.format(f, indent_level + 1)?;
+        }
+        writeln!(f, ";")
+    }
 }

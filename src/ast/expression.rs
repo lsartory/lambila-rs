@@ -3,7 +3,9 @@
 use super::common::*;
 use super::literal::Literal;
 use super::name::Name;
+use super::node::{AstNode, format_comma_separated};
 use super::type_def::{DiscreteRange, SubtypeIndication, TypeMark};
+use crate::parser::{Parser, ParseError};
 
 /// A VHDL expression.
 ///
@@ -288,4 +290,459 @@ pub enum MiscellaneousOperator {
     DoubleStar,
     Abs,
     Not,
+}
+
+// ─── AstNode implementations ───────────────────────────────────────────
+
+impl AstNode for Expression {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Expression::ConditionOperator(primary) => {
+                write!(f, "?? ")?;
+                primary.format(f, indent_level)
+            }
+            Expression::Logical(logical_expr) => logical_expr.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for LogicalExpression {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.first.format(f, indent_level)?;
+        for (op, relation) in &self.rest {
+            write!(f, " ")?;
+            op.format(f, indent_level)?;
+            write!(f, " ")?;
+            relation.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for Relation {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.left.format(f, indent_level)?;
+        if let Some((op, right)) = &self.operator_and_right {
+            write!(f, " ")?;
+            op.format(f, indent_level)?;
+            write!(f, " ")?;
+            right.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ShiftExpression {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.left.format(f, indent_level)?;
+        if let Some((op, right)) = &self.operator_and_right {
+            write!(f, " ")?;
+            op.format(f, indent_level)?;
+            write!(f, " ")?;
+            right.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for SimpleExpression {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(sign) = &self.sign {
+            match sign {
+                Sign::Plus => write!(f, "+")?,
+                Sign::Minus => write!(f, "-")?,
+            }
+        }
+        self.first_term.format(f, indent_level)?;
+        for (op, term) in &self.rest {
+            write!(f, " ")?;
+            op.format(f, indent_level)?;
+            write!(f, " ")?;
+            term.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for Term {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.first.format(f, indent_level)?;
+        for (op, factor) in &self.rest {
+            write!(f, " ")?;
+            op.format(f, indent_level)?;
+            write!(f, " ")?;
+            factor.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for Factor {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Factor::Primary { base, exponent } => {
+                base.format(f, indent_level)?;
+                if let Some(exp) = exponent {
+                    write!(f, " ** ")?;
+                    exp.format(f, indent_level)?;
+                }
+                Ok(())
+            }
+            Factor::Abs(primary) => {
+                write!(f, "abs ")?;
+                primary.format(f, indent_level)
+            }
+            Factor::Not(primary) => {
+                write!(f, "not ")?;
+                primary.format(f, indent_level)
+            }
+            Factor::LogicalOp { operator, operand } => {
+                operator.format(f, indent_level)?;
+                write!(f, " ")?;
+                operand.format(f, indent_level)
+            }
+        }
+    }
+}
+
+impl AstNode for Primary {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Primary::Name(name) => name.format(f, indent_level),
+            Primary::Literal(lit) => lit.format(f, indent_level),
+            Primary::Aggregate(agg) => agg.format(f, indent_level),
+            Primary::FunctionCall(fc) => fc.format(f, indent_level),
+            Primary::QualifiedExpression(qe) => qe.format(f, indent_level),
+            Primary::TypeConversion(tc) => tc.format(f, indent_level),
+            Primary::Allocator(alloc) => alloc.format(f, indent_level),
+            Primary::Parenthesized(expr) => {
+                write!(f, "(")?;
+                expr.format(f, indent_level)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+impl AstNode for Aggregate {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "(")?;
+        format_comma_separated(&self.associations, f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for ElementAssociation {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(choices) = &self.choices {
+            choices.format(f, indent_level)?;
+            write!(f, " => ")?;
+        }
+        self.expression.format(f, indent_level)
+    }
+}
+
+impl AstNode for Choices {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for (i, choice) in self.choices.iter().enumerate() {
+            if i > 0 {
+                write!(f, " | ")?;
+            }
+            choice.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for Choice {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Choice::Expression(simple_expr) => simple_expr.format(f, indent_level),
+            Choice::DiscreteRange(dr) => dr.format(f, indent_level),
+            Choice::ElementName(name) => name.format(f, indent_level),
+            Choice::Others => write!(f, "others"),
+        }
+    }
+}
+
+impl AstNode for QualifiedExpression {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.type_mark.format(f, indent_level)?;
+        write!(f, "'")?;
+        match &self.operand {
+            QualifiedExpressionOperand::Expression(expr) => {
+                write!(f, "(")?;
+                expr.format(f, indent_level)?;
+                write!(f, ")")
+            }
+            QualifiedExpressionOperand::Aggregate(agg) => agg.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for QualifiedExpressionOperand {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            QualifiedExpressionOperand::Expression(expr) => expr.format(f, indent_level),
+            QualifiedExpressionOperand::Aggregate(agg) => agg.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for TypeConversion {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.type_mark.format(f, indent_level)?;
+        write!(f, "(")?;
+        self.expression.format(f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for Allocator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Allocator::SubtypeIndication(si) => {
+                write!(f, "new ")?;
+                si.format(f, indent_level)
+            }
+            Allocator::QualifiedExpression(qe) => {
+                write!(f, "new ")?;
+                qe.format(f, indent_level)
+            }
+        }
+    }
+}
+
+impl AstNode for ConditionOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        write!(f, "??")
+    }
+}
+
+impl AstNode for ConditionalExpressions {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for (i, alt) in self.alternatives.iter().enumerate() {
+            if i > 0 {
+                write!(f, " else ")?;
+            }
+            alt.format(f, indent_level)?;
+        }
+        if let Some(else_expr) = &self.else_expression {
+            write!(f, " else ")?;
+            else_expr.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ConditionalAlternative {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.expression.format(f, indent_level)?;
+        write!(f, " when ")?;
+        self.condition.format(f, indent_level)
+    }
+}
+
+impl AstNode for SelectedExpressions {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        for (i, alt) in self.alternatives.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            alt.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for SelectedExpressionAlternative {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.expression.format(f, indent_level)?;
+        write!(f, " when ")?;
+        self.choices.format(f, indent_level)
+    }
+}
+
+impl AstNode for AddingOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            AddingOperator::Plus => write!(f, "+"),
+            AddingOperator::Minus => write!(f, "-"),
+            AddingOperator::Concatenation => write!(f, "&"),
+        }
+    }
+}
+
+impl AstNode for MultiplyingOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            MultiplyingOperator::Multiply => write!(f, "*"),
+            MultiplyingOperator::Divide => write!(f, "/"),
+            MultiplyingOperator::Mod => write!(f, "mod"),
+            MultiplyingOperator::Rem => write!(f, "rem"),
+        }
+    }
+}
+
+impl AstNode for RelationalOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            RelationalOperator::Eq => write!(f, "="),
+            RelationalOperator::Neq => write!(f, "/="),
+            RelationalOperator::Lt => write!(f, "<"),
+            RelationalOperator::Lte => write!(f, "<="),
+            RelationalOperator::Gt => write!(f, ">"),
+            RelationalOperator::Gte => write!(f, ">="),
+            RelationalOperator::MatchEq => write!(f, "?="),
+            RelationalOperator::MatchNeq => write!(f, "?/="),
+            RelationalOperator::MatchLt => write!(f, "?<"),
+            RelationalOperator::MatchLte => write!(f, "?<="),
+            RelationalOperator::MatchGt => write!(f, "?>"),
+            RelationalOperator::MatchGte => write!(f, "?>="),
+        }
+    }
+}
+
+impl AstNode for ShiftOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            ShiftOperator::Sll => write!(f, "sll"),
+            ShiftOperator::Srl => write!(f, "srl"),
+            ShiftOperator::Sla => write!(f, "sla"),
+            ShiftOperator::Sra => write!(f, "sra"),
+            ShiftOperator::Rol => write!(f, "rol"),
+            ShiftOperator::Ror => write!(f, "ror"),
+        }
+    }
+}
+
+impl AstNode for LogicalOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            LogicalOperator::And => write!(f, "and"),
+            LogicalOperator::Or => write!(f, "or"),
+            LogicalOperator::Nand => write!(f, "nand"),
+            LogicalOperator::Nor => write!(f, "nor"),
+            LogicalOperator::Xor => write!(f, "xor"),
+            LogicalOperator::Xnor => write!(f, "xnor"),
+        }
+    }
+}
+
+impl AstNode for MiscellaneousOperator {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            MiscellaneousOperator::DoubleStar => write!(f, "**"),
+            MiscellaneousOperator::Abs => write!(f, "abs"),
+            MiscellaneousOperator::Not => write!(f, "not"),
+        }
+    }
 }

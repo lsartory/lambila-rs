@@ -28,6 +28,7 @@
 
 pub mod ast;
 mod lexer;
+pub mod parser;
 mod version;
 
 pub use lexer::token::{KeywordKind, LexError, LexResult, Span, Token, TokenKind};

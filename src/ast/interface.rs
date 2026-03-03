@@ -3,7 +3,9 @@
 use super::common::*;
 use super::expression::Expression;
 use super::name::Name;
+use super::node::{AstNode, write_indent, format_comma_separated, format_semicolon_lines};
 use super::type_def::{SubtypeIndication, TypeMark};
+use crate::parser::{Parser, ParseError};
 
 /// EBNF (VHDL-2008): `interface_declaration ::= interface_object_declaration
 ///     | interface_type_declaration | interface_subprogram_declaration
@@ -192,4 +194,342 @@ pub type PortList = InterfaceList;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortMapAspect {
     pub association_list: super::association::AssociationList,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for InterfaceDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Object(inner) => inner.format(f, indent_level),
+            Self::Type(inner) => inner.format(f, indent_level),
+            Self::Subprogram(inner) => inner.format(f, indent_level),
+            Self::Package(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for InterfaceList {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_semicolon_lines(&self.elements, f, indent_level)
+    }
+}
+
+impl AstNode for InterfaceObjectDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Constant(inner) => inner.format(f, indent_level),
+            Self::Signal(inner) => inner.format(f, indent_level),
+            Self::Variable(inner) => inner.format(f, indent_level),
+            Self::File(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for InterfaceConstantDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if self.has_constant_keyword {
+            write!(f, "constant ")?;
+        }
+        format_comma_separated(&self.identifiers.identifiers, f, indent_level)?;
+        write!(f, " : ")?;
+        if self.has_in_keyword {
+            write!(f, "in ")?;
+        }
+        self.subtype_indication.format(f, indent_level)?;
+        if let Some(expr) = &self.default_expression {
+            write!(f, " := ")?;
+            expr.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for InterfaceSignalDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if self.has_signal_keyword {
+            write!(f, "signal ")?;
+        }
+        format_comma_separated(&self.identifiers.identifiers, f, indent_level)?;
+        write!(f, " : ")?;
+        if let Some(mode) = &self.mode {
+            mode.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.subtype_indication.format(f, indent_level)?;
+        if self.has_bus {
+            write!(f, " bus")?;
+        }
+        if let Some(expr) = &self.default_expression {
+            write!(f, " := ")?;
+            expr.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for InterfaceVariableDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if self.has_variable_keyword {
+            write!(f, "variable ")?;
+        }
+        format_comma_separated(&self.identifiers.identifiers, f, indent_level)?;
+        write!(f, " : ")?;
+        if let Some(mode) = &self.mode {
+            mode.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.subtype_indication.format(f, indent_level)?;
+        if let Some(expr) = &self.default_expression {
+            write!(f, " := ")?;
+            expr.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for InterfaceFileDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "file ")?;
+        format_comma_separated(&self.identifiers.identifiers, f, indent_level)?;
+        write!(f, " : ")?;
+        self.subtype_indication.format(f, indent_level)
+    }
+}
+
+impl AstNode for InterfaceIncompleteTypeDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "type ")?;
+        self.identifier.format(f, indent_level)
+    }
+}
+
+impl AstNode for InterfaceSubprogramDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.specification.format(f, indent_level)?;
+        if let Some(default) = &self.default {
+            write!(f, " is ")?;
+            default.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for InterfaceSubprogramSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Procedure(inner) => inner.format(f, indent_level),
+            Self::Function(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for InterfaceProcedureSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "procedure ")?;
+        self.designator.format(f, indent_level)?;
+        if let Some(params) = &self.parameter_list {
+            if self.has_parameter_keyword {
+                write!(f, " parameter")?;
+            }
+            write!(f, " (")?;
+            params.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for InterfaceFunctionSpecification {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        if let Some(purity) = &self.purity {
+            purity.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        write!(f, "function ")?;
+        self.designator.format(f, indent_level)?;
+        if let Some(params) = &self.parameter_list {
+            if self.has_parameter_keyword {
+                write!(f, " parameter")?;
+            }
+            write!(f, " (")?;
+            params.format(f, indent_level)?;
+            write!(f, ")")?;
+        }
+        write!(f, " return ")?;
+        self.return_type.format(f, indent_level)
+    }
+}
+
+impl AstNode for Purity {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Pure => write!(f, "pure"),
+            Self::Impure => write!(f, "impure"),
+        }
+    }
+}
+
+impl AstNode for InterfaceSubprogramDefault {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Name(name) => name.format(f, indent_level),
+            Self::Box => write!(f, "<>"),
+        }
+    }
+}
+
+impl AstNode for InterfacePackageDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "package ")?;
+        self.identifier.format(f, indent_level)?;
+        write!(f, " is new ")?;
+        self.package_name.format(f, indent_level)?;
+        write!(f, " ")?;
+        self.generic_map_aspect.format(f, indent_level)
+    }
+}
+
+impl AstNode for InterfacePackageGenericMapAspect {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::GenericMapAspect(inner) => inner.format(f, indent_level),
+            Self::Box => write!(f, "generic map (<>)"),
+            Self::Default => write!(f, "generic map (default)"),
+        }
+    }
+}
+
+impl AstNode for GenericClause {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        writeln!(f, "generic (")?;
+        self.generic_list.format(f, indent_level + 1)?;
+        writeln!(f)?;
+        write_indent(f, indent_level)?;
+        writeln!(f, ");")
+    }
+}
+
+impl AstNode for GenericMapAspect {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        writeln!(f, "generic map (")?;
+        format_comma_separated(&self.association_list.elements, f, indent_level + 1)?;
+        writeln!(f)?;
+        write_indent(f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for PortClause {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        writeln!(f, "port (")?;
+        self.port_list.format(f, indent_level + 1)?;
+        writeln!(f)?;
+        write_indent(f, indent_level)?;
+        writeln!(f, ");")
+    }
+}
+
+impl AstNode for PortMapAspect {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        writeln!(f, "port map (")?;
+        format_comma_separated(&self.association_list.elements, f, indent_level + 1)?;
+        writeln!(f)?;
+        write_indent(f, indent_level)?;
+        write!(f, ")")
+    }
 }

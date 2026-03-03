@@ -2,6 +2,8 @@
 
 use super::common::*;
 use super::name::Name;
+use super::node::AstNode;
+use crate::parser::{Parser, ParseError};
 
 /// A VHDL literal.
 ///
@@ -96,4 +98,139 @@ pub enum BaseSpecifier {
     SX,
     /// Decimal (VHDL-2008).
     D,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for Literal {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Literal::Numeric(n) => n.format(f, indent_level),
+            Literal::Enumeration(e) => e.format(f, indent_level),
+            Literal::String(s) => s.format(f, indent_level),
+            Literal::BitString(b) => b.format(f, indent_level),
+            Literal::Null => write!(f, "null"),
+        }
+    }
+}
+
+impl AstNode for NumericLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            NumericLiteral::Abstract(a) => a.format(f, indent_level),
+            NumericLiteral::Physical(p) => p.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for AbstractLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            AbstractLiteral::Decimal(d) => d.format(f, indent_level),
+            AbstractLiteral::Based(b) => b.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for DecimalLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        write!(f, "{}", self.text)
+    }
+}
+
+impl AstNode for BasedLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        write!(f, "{}", self.text)
+    }
+}
+
+impl AstNode for PhysicalLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(ref value) = self.value {
+            value.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.unit_name.format(f, indent_level)
+    }
+}
+
+impl AstNode for EnumerationLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            EnumerationLiteral::Identifier(id) => id.format(f, indent_level),
+            EnumerationLiteral::CharacterLiteral(c) => write!(f, "'{}'", c),
+        }
+    }
+}
+
+impl AstNode for StringLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        write!(f, "\"{}\"", self.text)
+    }
+}
+
+impl AstNode for BitStringLiteral {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        write!(f, "{}", self.text)
+    }
+}
+
+impl AstNode for BaseSpecifier {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
+        let s = match self {
+            BaseSpecifier::B => "b",
+            BaseSpecifier::O => "o",
+            BaseSpecifier::X => "x",
+            BaseSpecifier::UB => "ub",
+            BaseSpecifier::UO => "uo",
+            BaseSpecifier::UX => "ux",
+            BaseSpecifier::SB => "sb",
+            BaseSpecifier::SO => "so",
+            BaseSpecifier::SX => "sx",
+            BaseSpecifier::D => "d",
+        };
+        write!(f, "{}", s)
+    }
 }

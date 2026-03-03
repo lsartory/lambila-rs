@@ -4,6 +4,8 @@ use super::common::*;
 use super::expression::SimpleExpression;
 use super::literal::{EnumerationLiteral, PhysicalLiteral};
 use super::name::Name;
+use super::node::{AstNode, format_comma_separated, format_lines, write_indent};
+use crate::parser::{ParseError, Parser};
 
 /// EBNF: `type_declaration ::= full_type_declaration | incomplete_type_declaration`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,4 +375,655 @@ pub struct RecordConstraint {
 pub struct RecordElementConstraint {
     pub element_name: SimpleName,
     pub constraint: ElementConstraint,
+}
+
+// ---------------------------------------------------------------------------
+// AstNode implementations
+// ---------------------------------------------------------------------------
+
+impl AstNode for TypeDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Full(inner) => inner.format(f, indent_level),
+            Self::Incomplete(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for FullTypeDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "type ")?;
+        self.identifier.format(f, indent_level)?;
+        write!(f, " is ")?;
+        self.type_definition.format(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for IncompleteTypeDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "type ")?;
+        self.identifier.format(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for TypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Scalar(inner) => inner.format(f, indent_level),
+            Self::Composite(inner) => inner.format(f, indent_level),
+            Self::Access(inner) => inner.format(f, indent_level),
+            Self::File(inner) => inner.format(f, indent_level),
+            Self::Protected(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for TypeMark {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::TypeName(name) => name.format(f, indent_level),
+            Self::SubtypeName(name) => name.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ScalarTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Enumeration(inner) => inner.format(f, indent_level),
+            Self::Integer(inner) => inner.format(f, indent_level),
+            Self::Floating(inner) => inner.format(f, indent_level),
+            Self::Physical(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for EnumerationTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "(")?;
+        format_comma_separated(&self.literals, f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for IntegerTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.range_constraint.format(f, indent_level)
+    }
+}
+
+impl AstNode for FloatingTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.range_constraint.format(f, indent_level)
+    }
+}
+
+impl AstNode for PhysicalTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.range_constraint.format(f, indent_level)?;
+        writeln!(f)?;
+        write_indent(f, indent_level + 1)?;
+        writeln!(f, "units")?;
+        write_indent(f, indent_level + 2)?;
+        self.primary_unit.format(f, indent_level + 2)?;
+        writeln!(f, ";")?;
+        for unit in &self.secondary_units {
+            write_indent(f, indent_level + 2)?;
+            unit.format(f, indent_level + 2)?;
+            writeln!(f, ";")?;
+        }
+        write_indent(f, indent_level + 1)?;
+        write!(f, "end units")?;
+        if let Some(name) = &self.end_name {
+            write!(f, " ")?;
+            name.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for PrimaryUnitDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.identifier.format(f, indent_level)
+    }
+}
+
+impl AstNode for SecondaryUnitDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.identifier.format(f, indent_level)?;
+        write!(f, " = ")?;
+        self.literal.format(f, indent_level)
+    }
+}
+
+impl AstNode for CompositeTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Array(inner) => inner.format(f, indent_level),
+            Self::Record(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ArrayTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Unbounded(inner) => inner.format(f, indent_level),
+            Self::Constrained(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for UnboundedArrayDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "array (")?;
+        format_comma_separated(&self.index_subtypes, f, indent_level)?;
+        write!(f, ") of ")?;
+        self.element_subtype.format(f, indent_level)
+    }
+}
+
+impl AstNode for ConstrainedArrayDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "array ")?;
+        self.index_constraint.format(f, indent_level)?;
+        write!(f, " of ")?;
+        self.element_subtype.format(f, indent_level)
+    }
+}
+
+impl AstNode for RecordTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        writeln!(f, "record")?;
+        for elem in &self.elements {
+            elem.format(f, indent_level + 1)?;
+            writeln!(f, ";")?;
+        }
+        write_indent(f, indent_level)?;
+        write!(f, "end record")?;
+        if let Some(name) = &self.end_name {
+            write!(f, " ")?;
+            name.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ElementDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        self.identifiers.format(f, indent_level)?;
+        write!(f, " : ")?;
+        self.subtype.format(f, indent_level)
+    }
+}
+
+impl AstNode for ElementSubtypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.subtype_indication.format(f, indent_level)
+    }
+}
+
+impl AstNode for AccessTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "access ")?;
+        self.subtype_indication.format(f, indent_level)
+    }
+}
+
+impl AstNode for FileTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "file of ")?;
+        self.type_mark.format(f, indent_level)
+    }
+}
+
+impl AstNode for ProtectedTypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Declaration(inner) => inner.format(f, indent_level),
+            Self::Body(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ProtectedTypeDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        writeln!(f, "protected")?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end protected")?;
+        if let Some(name) = &self.end_name {
+            write!(f, " ")?;
+            name.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ProtectedTypeDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for ProtectedTypeDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ProtectedTypeBody {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        writeln!(f, "protected body")?;
+        self.declarative_part.format(f, indent_level + 1)?;
+        write_indent(f, indent_level)?;
+        write!(f, "end protected body")?;
+        if let Some(name) = &self.end_name {
+            write!(f, " ")?;
+            name.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ProtectedTypeBodyDeclarativePart {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_lines(&self.items, f, indent_level)
+    }
+}
+
+impl AstNode for ProtectedTypeBodyDeclarativeItem {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubprogramDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubprogramBody(inner) => inner.format(f, indent_level),
+            Self::SubprogramInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageDeclaration(inner) => inner.format(f, indent_level),
+            Self::PackageBody(inner) => inner.format(f, indent_level),
+            Self::PackageInstantiationDeclaration(inner) => inner.format(f, indent_level),
+            Self::TypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::SubtypeDeclaration(inner) => inner.format(f, indent_level),
+            Self::ConstantDeclaration(inner) => inner.format(f, indent_level),
+            Self::VariableDeclaration(inner) => inner.format(f, indent_level),
+            Self::FileDeclaration(inner) => inner.format(f, indent_level),
+            Self::AliasDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeDeclaration(inner) => inner.format(f, indent_level),
+            Self::AttributeSpecification(inner) => inner.format(f, indent_level),
+            Self::UseClause(inner) => inner.format(f, indent_level),
+            Self::GroupTemplateDeclaration(inner) => inner.format(f, indent_level),
+            Self::GroupDeclaration(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for SubtypeDeclaration {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write_indent(f, indent_level)?;
+        write!(f, "subtype ")?;
+        self.identifier.format(f, indent_level)?;
+        write!(f, " is ")?;
+        self.subtype_indication.format(f, indent_level)?;
+        writeln!(f, ";")
+    }
+}
+
+impl AstNode for SubtypeIndication {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        if let Some(resolution) = &self.resolution {
+            resolution.format(f, indent_level)?;
+            write!(f, " ")?;
+        }
+        self.type_mark.format(f, indent_level)?;
+        if let Some(constraint) = &self.constraint {
+            write!(f, " ")?;
+            constraint.format(f, indent_level)?;
+        }
+        Ok(())
+    }
+}
+
+impl AstNode for ResolutionIndication {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::FunctionName(name) => name.format(f, indent_level),
+            Self::ElementResolution(res) => {
+                write!(f, "(")?;
+                res.format(f, indent_level)?;
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+impl AstNode for ElementResolution {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Array(inner) => inner.format(f, indent_level),
+            Self::Record(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for ArrayElementResolution {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.resolution.format(f, indent_level)
+    }
+}
+
+impl AstNode for RecordResolution {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        format_comma_separated(&self.elements, f, indent_level)
+    }
+}
+
+impl AstNode for RecordElementResolution {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.element_name.format(f, indent_level)?;
+        write!(f, " ")?;
+        self.resolution.format(f, indent_level)
+    }
+}
+
+impl AstNode for Constraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Range(inner) => inner.format(f, indent_level),
+            Self::Index(inner) => inner.format(f, indent_level),
+            Self::Array(inner) => inner.format(f, indent_level),
+            Self::Record(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for RangeConstraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "range ")?;
+        self.range.format(f, indent_level)
+    }
+}
+
+impl AstNode for Range {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Attribute(name) => name.format(f, indent_level),
+            Self::Explicit {
+                left,
+                direction,
+                right,
+            } => {
+                left.format(f, indent_level)?;
+                write!(f, " ")?;
+                direction.format(f, indent_level)?;
+                write!(f, " ")?;
+                right.format(f, indent_level)
+            }
+        }
+    }
+}
+
+impl AstNode for DiscreteRange {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::SubtypeIndication(inner) => inner.format(f, indent_level),
+            Self::Range(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for IndexConstraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "(")?;
+        format_comma_separated(&self.ranges, f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for IndexSubtypeDefinition {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.type_mark.format(f, indent_level)?;
+        write!(f, " range <>")
+    }
+}
+
+impl AstNode for ArrayConstraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::IndexConstraint {
+                index_constraint,
+                element_constraint,
+            } => {
+                index_constraint.format(f, indent_level)?;
+                if let Some(ec) = element_constraint {
+                    write!(f, " ")?;
+                    ec.format(f, indent_level)?;
+                }
+                Ok(())
+            }
+            Self::Open {
+                element_constraint,
+            } => {
+                write!(f, "(open)")?;
+                if let Some(ec) = element_constraint {
+                    write!(f, " ")?;
+                    ec.format(f, indent_level)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl AstNode for ElementConstraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        match self {
+            Self::Array(inner) => inner.format(f, indent_level),
+            Self::Record(inner) => inner.format(f, indent_level),
+        }
+    }
+}
+
+impl AstNode for RecordConstraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        write!(f, "(")?;
+        format_comma_separated(&self.elements, f, indent_level)?;
+        write!(f, ")")
+    }
+}
+
+impl AstNode for RecordElementConstraint {
+    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
+        todo!()
+    }
+
+    fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
+        self.element_name.format(f, indent_level)?;
+        write!(f, " ")?;
+        self.constraint.format(f, indent_level)
+    }
 }
