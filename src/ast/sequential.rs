@@ -3,9 +3,10 @@
 use super::common::*;
 use super::expression::*;
 use super::name::Name;
-use super::node::{format_comma_separated, format_lines, write_indent, AstNode};
+use super::node::{AstNode, format_comma_separated, format_lines, write_indent};
 use super::type_def::DiscreteRange;
 use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF (VHDL-2008): `sequential_statement ::= wait_statement | assertion_statement
 ///     | report_statement | signal_assignment_statement | variable_assignment_statement
@@ -418,7 +419,7 @@ pub struct LoopStatement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IterationScheme {
     While(Condition),
-    For(ParameterSpecification),
+    For(Box<ParameterSpecification>),
 }
 
 /// EBNF: `parameter_specification ::= identifier IN discrete_range`
@@ -459,11 +460,393 @@ pub struct NullStatement {
     pub label: Option<Label>,
 }
 
+// ─── Helper functions ────────────────────────────────────────────────────
+
+/// Try to parse an optional `ForceMode` (IN | OUT). Returns `None` if the
+/// current token is neither `IN` nor `OUT`.
+fn parse_optional_force_mode(parser: &mut Parser) -> Option<ForceMode> {
+    if parser.at_keyword(KeywordKind::In) {
+        parser.consume();
+        Some(ForceMode::In)
+    } else if parser.at_keyword(KeywordKind::Out) {
+        parser.consume();
+        Some(ForceMode::Out)
+    } else {
+        None
+    }
+}
+
+/// Try to parse an optional `DelayMechanism`. Returns `Ok(None)` if the
+/// current token does not start a delay mechanism.
+fn parse_optional_delay_mechanism(
+    parser: &mut Parser,
+) -> Result<Option<DelayMechanism>, ParseError> {
+    if parser.at_keyword(KeywordKind::Transport)
+        || parser.at_keyword(KeywordKind::Reject)
+        || parser.at_keyword(KeywordKind::Inertial)
+    {
+        Ok(Some(DelayMechanism::parse(parser)?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// After parsing `target <=`, determine which kind of signal assignment
+/// follows. Returns a `SignalAssignmentStatement` with `label: None`
+/// (the caller sets the label).
+fn parse_signal_assignment_after_arrow(
+    parser: &mut Parser,
+    target: Target,
+) -> Result<SignalAssignmentStatement, ParseError> {
+    if parser.at_keyword(KeywordKind::Force) {
+        // FORCE [force_mode] expression_or_conditional ;
+        parser.expect_keyword(KeywordKind::Force)?;
+        let force_mode = parse_optional_force_mode(parser);
+        let expression = Expression::parse(parser)?;
+        // Check for WHEN → conditional force assignment.
+        if parser.at_keyword(KeywordKind::When) {
+            // This is a conditional force assignment.
+            // We need to build ConditionalExpressions. The first expression
+            // is already parsed; now parse WHEN condition {ELSE expression WHEN condition} [ELSE expression].
+            parser.expect_keyword(KeywordKind::When)?;
+            let first_condition = Expression::parse(parser)?;
+            let mut alternatives = vec![ConditionalAlternative {
+                expression: Box::new(expression),
+                condition: first_condition,
+            }];
+            let mut else_expression = None;
+            while parser.consume_if_keyword(KeywordKind::Else).is_some() {
+                let expr = Expression::parse(parser)?;
+                if parser.consume_if_keyword(KeywordKind::When).is_some() {
+                    let cond = Expression::parse(parser)?;
+                    alternatives.push(ConditionalAlternative {
+                        expression: Box::new(expr),
+                        condition: cond,
+                    });
+                } else {
+                    else_expression = Some(Box::new(expr));
+                    break;
+                }
+            }
+            Ok(SignalAssignmentStatement::Conditional {
+                label: None,
+                assignment: ConditionalSignalAssignment::Force(ConditionalForceAssignment {
+                    target,
+                    force_mode,
+                    conditional_expressions: ConditionalExpressions {
+                        alternatives,
+                        else_expression,
+                    },
+                }),
+            })
+        } else {
+            Ok(SignalAssignmentStatement::Simple {
+                label: None,
+                assignment: SimpleSignalAssignment::Force(SimpleForceAssignment {
+                    target,
+                    force_mode,
+                    expression,
+                }),
+            })
+        }
+    } else if parser.at_keyword(KeywordKind::Release) {
+        parser.expect_keyword(KeywordKind::Release)?;
+        let force_mode = parse_optional_force_mode(parser);
+        Ok(SignalAssignmentStatement::Simple {
+            label: None,
+            assignment: SimpleSignalAssignment::Release(SimpleReleaseAssignment {
+                target,
+                force_mode,
+            }),
+        })
+    } else {
+        // [delay_mechanism] waveform [WHEN condition ...] ;
+        let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+        let waveform = Waveform::parse(parser)?;
+
+        if parser.at_keyword(KeywordKind::When) {
+            // Conditional waveform assignment.
+            // waveform WHEN condition { ELSE waveform WHEN condition } [ELSE waveform]
+            parser.expect_keyword(KeywordKind::When)?;
+            let first_condition = Expression::parse(parser)?;
+            let mut alternatives = vec![ConditionalWaveformAlternative {
+                waveform,
+                condition: first_condition,
+            }];
+            let mut else_waveform = None;
+            while parser.consume_if_keyword(KeywordKind::Else).is_some() {
+                let wf = Waveform::parse(parser)?;
+                if parser.consume_if_keyword(KeywordKind::When).is_some() {
+                    let cond = Expression::parse(parser)?;
+                    alternatives.push(ConditionalWaveformAlternative {
+                        waveform: wf,
+                        condition: cond,
+                    });
+                } else {
+                    else_waveform = Some(wf);
+                    break;
+                }
+            }
+            Ok(SignalAssignmentStatement::Conditional {
+                label: None,
+                assignment: ConditionalSignalAssignment::Waveform(ConditionalWaveformAssignment {
+                    target,
+                    delay_mechanism,
+                    conditional_waveforms: ConditionalWaveforms {
+                        alternatives,
+                        else_waveform,
+                    },
+                }),
+            })
+        } else {
+            Ok(SignalAssignmentStatement::Simple {
+                label: None,
+                assignment: SimpleSignalAssignment::Waveform(SimpleWaveformAssignment {
+                    target,
+                    delay_mechanism,
+                    waveform,
+                }),
+            })
+        }
+    }
+}
+
+/// After parsing `target :=`, determine which kind of variable assignment
+/// follows. Returns a `VariableAssignmentStatement` with `label: None`
+/// (the caller sets the label).
+fn parse_variable_assignment_after_assign(
+    parser: &mut Parser,
+    target: Target,
+) -> Result<VariableAssignmentStatement, ParseError> {
+    // Parse expression; then check for WHEN (conditional).
+    let expression = Expression::parse(parser)?;
+
+    if parser.at_keyword(KeywordKind::When) {
+        // Conditional variable assignment.
+        // expression WHEN condition { ELSE expression WHEN condition } [ ELSE expression ]
+        parser.expect_keyword(KeywordKind::When)?;
+        let first_condition = Expression::parse(parser)?;
+        let mut alternatives = vec![ConditionalAlternative {
+            expression: Box::new(expression),
+            condition: first_condition,
+        }];
+        let mut else_expression = None;
+        while parser.consume_if_keyword(KeywordKind::Else).is_some() {
+            let expr = Expression::parse(parser)?;
+            if parser.consume_if_keyword(KeywordKind::When).is_some() {
+                let cond = Expression::parse(parser)?;
+                alternatives.push(ConditionalAlternative {
+                    expression: Box::new(expr),
+                    condition: cond,
+                });
+            } else {
+                else_expression = Some(Box::new(expr));
+                break;
+            }
+        }
+        Ok(VariableAssignmentStatement::Conditional {
+            label: None,
+            assignment: ConditionalVariableAssignment {
+                target,
+                conditional_expressions: ConditionalExpressions {
+                    alternatives,
+                    else_expression,
+                },
+            },
+        })
+    } else {
+        Ok(VariableAssignmentStatement::Simple {
+            label: None,
+            assignment: SimpleVariableAssignment { target, expression },
+        })
+    }
+}
+
 // ─── AstNode implementations ────────────────────────────────────────────
 
 impl AstNode for SequentialStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Check for labeled statement: Identifier followed by ':'
+        let label = if (parser.at(TokenKind::Identifier)
+            || parser.at(TokenKind::ExtendedIdentifier))
+            && parser
+                .peek_nth(1)
+                .is_some_and(|t| t.kind == TokenKind::Colon)
+        {
+            let lbl = Label::parse(parser)?;
+            parser.expect(TokenKind::Colon)?;
+            Some(lbl)
+        } else {
+            None
+        };
+
+        // Dispatch based on the current token.
+        let stmt = if parser.at_keyword(KeywordKind::Wait) {
+            let mut s = WaitStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Wait(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Assert) {
+            let mut s = AssertionStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Assertion(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Report) {
+            let mut s = ReportStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Report(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::If) {
+            let mut s = IfStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::If(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Case) {
+            let mut s = CaseStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Case(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Loop)
+            || parser.at_keyword(KeywordKind::While)
+            || parser.at_keyword(KeywordKind::For)
+        {
+            let mut s = LoopStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Loop(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Next) {
+            let mut s = NextStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Next(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Exit) {
+            let mut s = ExitStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Exit(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Return) {
+            let mut s = ReturnStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Return(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::Null) {
+            let mut s = NullStatement::parse(parser)?;
+            s.label = label.clone();
+            SequentialStatement::Null(Box::new(s))
+        } else if parser.at_keyword(KeywordKind::With) {
+            // WITH expression SELECT [?] target <= ... or target := ...
+            // Parse: WITH expression SELECT [?] target
+            parser.expect_keyword(KeywordKind::With)?;
+            let selector = Expression::parse(parser)?;
+            parser.expect_keyword(KeywordKind::Select)?;
+            let matching = parser.consume_if(TokenKind::QuestionMark).is_some();
+            let target = Target::parse(parser)?;
+
+            if parser.at(TokenKind::LtEquals) {
+                // Selected signal assignment.
+                parser.expect(TokenKind::LtEquals)?;
+                if parser.at_keyword(KeywordKind::Force) {
+                    parser.expect_keyword(KeywordKind::Force)?;
+                    let force_mode = parse_optional_force_mode(parser);
+                    let selected_expressions = SelectedExpressions::parse(parser)?;
+                    parser.expect(TokenKind::Semicolon)?;
+                    SequentialStatement::SignalAssignment(Box::new(
+                        SignalAssignmentStatement::Selected {
+                            label: label.clone(),
+                            assignment: SelectedSignalAssignment::Force(SelectedForceAssignment {
+                                selector,
+                                matching,
+                                target,
+                                force_mode,
+                                selected_expressions,
+                            }),
+                        },
+                    ))
+                } else {
+                    let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+                    let selected_waveforms = SelectedWaveforms::parse(parser)?;
+                    parser.expect(TokenKind::Semicolon)?;
+                    SequentialStatement::SignalAssignment(Box::new(
+                        SignalAssignmentStatement::Selected {
+                            label: label.clone(),
+                            assignment: SelectedSignalAssignment::Waveform(
+                                SelectedWaveformAssignment {
+                                    selector,
+                                    matching,
+                                    target,
+                                    delay_mechanism,
+                                    selected_waveforms,
+                                },
+                            ),
+                        },
+                    ))
+                }
+            } else if parser.at(TokenKind::VarAssign) {
+                // Selected variable assignment.
+                parser.expect(TokenKind::VarAssign)?;
+                let selected_expressions = SelectedExpressions::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                SequentialStatement::VariableAssignment(Box::new(
+                    VariableAssignmentStatement::Selected {
+                        label: label.clone(),
+                        assignment: SelectedVariableAssignment {
+                            selector,
+                            matching,
+                            target,
+                            selected_expressions,
+                        },
+                    },
+                ))
+            } else {
+                return Err(parser.error("expected '<=' or ':=' after selected target"));
+            }
+        } else {
+            // Must be a signal assignment, variable assignment, or procedure call.
+            // Parse name/target, then look at what follows.
+            let target = Target::parse(parser)?;
+
+            if parser.at(TokenKind::LtEquals) {
+                // Signal assignment.
+                parser.expect(TokenKind::LtEquals)?;
+                let mut result = parse_signal_assignment_after_arrow(parser, target)?;
+                // Set label on the result.
+                match &mut result {
+                    SignalAssignmentStatement::Simple { label: lbl, .. }
+                    | SignalAssignmentStatement::Conditional { label: lbl, .. }
+                    | SignalAssignmentStatement::Selected { label: lbl, .. } => {
+                        *lbl = label.clone();
+                    }
+                }
+                parser.expect(TokenKind::Semicolon)?;
+                SequentialStatement::SignalAssignment(Box::new(result))
+            } else if parser.at(TokenKind::VarAssign) {
+                // Variable assignment.
+                parser.expect(TokenKind::VarAssign)?;
+                let mut result = parse_variable_assignment_after_assign(parser, target)?;
+                // Set label on the result.
+                match &mut result {
+                    VariableAssignmentStatement::Simple { label: lbl, .. }
+                    | VariableAssignmentStatement::Conditional { label: lbl, .. }
+                    | VariableAssignmentStatement::Selected { label: lbl, .. } => {
+                        *lbl = label.clone();
+                    }
+                }
+                parser.expect(TokenKind::Semicolon)?;
+                SequentialStatement::VariableAssignment(Box::new(result))
+            } else {
+                // Procedure call: the target was actually the procedure name.
+                // Extract the Name from the Target.
+                let procedure_name = match target {
+                    Target::Name(name) => name,
+                    Target::Aggregate(_) => {
+                        return Err(parser.error(
+                            "expected procedure call, signal assignment, or variable assignment",
+                        ));
+                    }
+                };
+                parser.expect(TokenKind::Semicolon)?;
+                SequentialStatement::ProcedureCall(Box::new(ProcedureCallStatement {
+                    label: label.clone(),
+                    procedure_call: ProcedureCall {
+                        procedure_name,
+                        parameters: None,
+                    },
+                }))
+            }
+        };
+
+        Ok(stmt)
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -486,8 +869,18 @@ impl AstNode for SequentialStatement {
 }
 
 impl AstNode for SequenceOfStatements {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut statements = Vec::new();
+        // Parse statements until a terminator keyword or EOF.
+        while !parser.eof()
+            && !parser.at_keyword(KeywordKind::End)
+            && !parser.at_keyword(KeywordKind::Elsif)
+            && !parser.at_keyword(KeywordKind::Else)
+            && !parser.at_keyword(KeywordKind::When)
+        {
+            statements.push(SequentialStatement::parse(parser)?);
+        }
+        Ok(SequenceOfStatements { statements })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -496,8 +889,36 @@ impl AstNode for SequenceOfStatements {
 }
 
 impl AstNode for WaitStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse; here we start at WAIT.
+        parser.expect_keyword(KeywordKind::Wait)?;
+
+        let sensitivity_clause = if parser.at_keyword(KeywordKind::On) {
+            Some(SensitivityClause::parse(parser)?)
+        } else {
+            None
+        };
+
+        let condition_clause = if parser.at_keyword(KeywordKind::Until) {
+            Some(ConditionClause::parse(parser)?)
+        } else {
+            None
+        };
+
+        let timeout_clause = if parser.at_keyword(KeywordKind::For) {
+            Some(TimeoutClause::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(WaitStatement {
+            label: None,
+            sensitivity_clause,
+            condition_clause,
+            timeout_clause,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -524,8 +945,10 @@ impl AstNode for WaitStatement {
 }
 
 impl AstNode for SensitivityClause {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::On)?;
+        let sensitivity_list = SensitivityList::parse(parser)?;
+        Ok(SensitivityClause { sensitivity_list })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -535,8 +958,12 @@ impl AstNode for SensitivityClause {
 }
 
 impl AstNode for SensitivityList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut signals = vec![Name::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            signals.push(Name::parse(parser)?);
+        }
+        Ok(SensitivityList { signals })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -545,8 +972,10 @@ impl AstNode for SensitivityList {
 }
 
 impl AstNode for ConditionClause {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Until)?;
+        let condition = Expression::parse(parser)?;
+        Ok(ConditionClause { condition })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -556,8 +985,10 @@ impl AstNode for ConditionClause {
 }
 
 impl AstNode for TimeoutClause {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::For)?;
+        let time_expression = Expression::parse(parser)?;
+        Ok(TimeoutClause { time_expression })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -567,8 +998,27 @@ impl AstNode for TimeoutClause {
 }
 
 impl AstNode for Assertion {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Assert)?;
+        let condition = Expression::parse(parser)?;
+
+        let report = if parser.consume_if_keyword(KeywordKind::Report).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+
+        let severity = if parser.consume_if_keyword(KeywordKind::Severity).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+
+        Ok(Assertion {
+            condition,
+            report,
+            severity,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -587,8 +1037,14 @@ impl AstNode for Assertion {
 }
 
 impl AstNode for AssertionStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        let assertion = Assertion::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(AssertionStatement {
+            label: None,
+            assertion,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -603,8 +1059,24 @@ impl AstNode for AssertionStatement {
 }
 
 impl AstNode for ReportStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::Report)?;
+        let report_expression = Expression::parse(parser)?;
+
+        let severity = if parser.consume_if_keyword(KeywordKind::Severity).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(ReportStatement {
+            label: None,
+            report_expression,
+            severity,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -624,8 +1096,24 @@ impl AstNode for ReportStatement {
 }
 
 impl AstNode for SignalAssignmentStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // This standalone parse handles:
+        //   target <= ...  (simple/conditional)
+        //   WITH expr SELECT [?] target <= ...  (selected)
+        if parser.at_keyword(KeywordKind::With) {
+            let assignment = SelectedSignalAssignment::parse(parser)?;
+            parser.expect(TokenKind::Semicolon)?;
+            Ok(SignalAssignmentStatement::Selected {
+                label: None,
+                assignment,
+            })
+        } else {
+            let target = Target::parse(parser)?;
+            parser.expect(TokenKind::LtEquals)?;
+            let result = parse_signal_assignment_after_arrow(parser, target)?;
+            parser.expect(TokenKind::Semicolon)?;
+            Ok(result)
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -662,8 +1150,39 @@ impl AstNode for SignalAssignmentStatement {
 }
 
 impl AstNode for SimpleSignalAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Target and <= have already been consumed by the caller in the
+        // SignalAssignmentStatement flow. This standalone parse is provided
+        // for completeness but in practice the dispatching happens inside
+        // parse_signal_assignment_after_target.
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+
+        if parser.at_keyword(KeywordKind::Force) {
+            parser.expect_keyword(KeywordKind::Force)?;
+            let force_mode = parse_optional_force_mode(parser);
+            let expression = Expression::parse(parser)?;
+            Ok(SimpleSignalAssignment::Force(SimpleForceAssignment {
+                target,
+                force_mode,
+                expression,
+            }))
+        } else if parser.at_keyword(KeywordKind::Release) {
+            parser.expect_keyword(KeywordKind::Release)?;
+            let force_mode = parse_optional_force_mode(parser);
+            Ok(SimpleSignalAssignment::Release(SimpleReleaseAssignment {
+                target,
+                force_mode,
+            }))
+        } else {
+            let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+            let waveform = Waveform::parse(parser)?;
+            Ok(SimpleSignalAssignment::Waveform(SimpleWaveformAssignment {
+                target,
+                delay_mechanism,
+                waveform,
+            }))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -676,8 +1195,16 @@ impl AstNode for SimpleSignalAssignment {
 }
 
 impl AstNode for SimpleWaveformAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+        let waveform = Waveform::parse(parser)?;
+        Ok(SimpleWaveformAssignment {
+            target,
+            delay_mechanism,
+            waveform,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -692,8 +1219,17 @@ impl AstNode for SimpleWaveformAssignment {
 }
 
 impl AstNode for SimpleForceAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        parser.expect_keyword(KeywordKind::Force)?;
+        let force_mode = parse_optional_force_mode(parser);
+        let expression = Expression::parse(parser)?;
+        Ok(SimpleForceAssignment {
+            target,
+            force_mode,
+            expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -708,8 +1244,12 @@ impl AstNode for SimpleForceAssignment {
 }
 
 impl AstNode for SimpleReleaseAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        parser.expect_keyword(KeywordKind::Release)?;
+        let force_mode = parse_optional_force_mode(parser);
+        Ok(SimpleReleaseAssignment { target, force_mode })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -724,8 +1264,34 @@ impl AstNode for SimpleReleaseAssignment {
 }
 
 impl AstNode for ConditionalSignalAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // In practice, dispatching happens in parse_signal_assignment_after_target.
+        // This standalone parse is provided for completeness.
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+
+        if parser.at_keyword(KeywordKind::Force) {
+            parser.expect_keyword(KeywordKind::Force)?;
+            let force_mode = parse_optional_force_mode(parser);
+            let conditional_expressions = ConditionalExpressions::parse(parser)?;
+            Ok(ConditionalSignalAssignment::Force(
+                ConditionalForceAssignment {
+                    target,
+                    force_mode,
+                    conditional_expressions,
+                },
+            ))
+        } else {
+            let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+            let conditional_waveforms = ConditionalWaveforms::parse(parser)?;
+            Ok(ConditionalSignalAssignment::Waveform(
+                ConditionalWaveformAssignment {
+                    target,
+                    delay_mechanism,
+                    conditional_waveforms,
+                },
+            ))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -737,8 +1303,16 @@ impl AstNode for ConditionalSignalAssignment {
 }
 
 impl AstNode for ConditionalWaveformAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+        let conditional_waveforms = ConditionalWaveforms::parse(parser)?;
+        Ok(ConditionalWaveformAssignment {
+            target,
+            delay_mechanism,
+            conditional_waveforms,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -753,8 +1327,17 @@ impl AstNode for ConditionalWaveformAssignment {
 }
 
 impl AstNode for ConditionalForceAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        parser.expect_keyword(KeywordKind::Force)?;
+        let force_mode = parse_optional_force_mode(parser);
+        let conditional_expressions = ConditionalExpressions::parse(parser)?;
+        Ok(ConditionalForceAssignment {
+            target,
+            force_mode,
+            conditional_expressions,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -769,8 +1352,39 @@ impl AstNode for ConditionalForceAssignment {
 }
 
 impl AstNode for SelectedSignalAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // WITH expression SELECT [?] target <= ...
+        parser.expect_keyword(KeywordKind::With)?;
+        let selector = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Select)?;
+        let matching = parser.consume_if(TokenKind::QuestionMark).is_some();
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+
+        if parser.at_keyword(KeywordKind::Force) {
+            parser.expect_keyword(KeywordKind::Force)?;
+            let force_mode = parse_optional_force_mode(parser);
+            let selected_expressions = SelectedExpressions::parse(parser)?;
+            Ok(SelectedSignalAssignment::Force(SelectedForceAssignment {
+                selector,
+                matching,
+                target,
+                force_mode,
+                selected_expressions,
+            }))
+        } else {
+            let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+            let selected_waveforms = SelectedWaveforms::parse(parser)?;
+            Ok(SelectedSignalAssignment::Waveform(
+                SelectedWaveformAssignment {
+                    selector,
+                    matching,
+                    target,
+                    delay_mechanism,
+                    selected_waveforms,
+                },
+            ))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -782,8 +1396,22 @@ impl AstNode for SelectedSignalAssignment {
 }
 
 impl AstNode for SelectedWaveformAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::With)?;
+        let selector = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Select)?;
+        let matching = parser.consume_if(TokenKind::QuestionMark).is_some();
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        let delay_mechanism = parse_optional_delay_mechanism(parser)?;
+        let selected_waveforms = SelectedWaveforms::parse(parser)?;
+        Ok(SelectedWaveformAssignment {
+            selector,
+            matching,
+            target,
+            delay_mechanism,
+            selected_waveforms,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -805,8 +1433,23 @@ impl AstNode for SelectedWaveformAssignment {
 }
 
 impl AstNode for SelectedForceAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::With)?;
+        let selector = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Select)?;
+        let matching = parser.consume_if(TokenKind::QuestionMark).is_some();
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::LtEquals)?;
+        parser.expect_keyword(KeywordKind::Force)?;
+        let force_mode = parse_optional_force_mode(parser);
+        let selected_expressions = SelectedExpressions::parse(parser)?;
+        Ok(SelectedForceAssignment {
+            selector,
+            matching,
+            target,
+            force_mode,
+            selected_expressions,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -828,8 +1471,21 @@ impl AstNode for SelectedForceAssignment {
 }
 
 impl AstNode for DelayMechanism {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Transport).is_some() {
+            Ok(DelayMechanism::Transport)
+        } else if parser.at_keyword(KeywordKind::Reject) {
+            parser.expect_keyword(KeywordKind::Reject)?;
+            let reject_time = Expression::parse(parser)?;
+            parser.expect_keyword(KeywordKind::Inertial)?;
+            Ok(DelayMechanism::Inertial {
+                reject_time: Some(reject_time),
+            })
+        } else if parser.consume_if_keyword(KeywordKind::Inertial).is_some() {
+            Ok(DelayMechanism::Inertial { reject_time: None })
+        } else {
+            Err(parser.error("expected delay mechanism (transport, inertial, or reject)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -848,8 +1504,16 @@ impl AstNode for DelayMechanism {
 }
 
 impl AstNode for Waveform {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Unaffected).is_some() {
+            Ok(Waveform::Unaffected)
+        } else {
+            let mut elements = vec![WaveformElement::parse(parser)?];
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                elements.push(WaveformElement::parse(parser)?);
+            }
+            Ok(Waveform::Elements(elements))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -861,8 +1525,23 @@ impl AstNode for Waveform {
 }
 
 impl AstNode for WaveformElement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Null).is_some() {
+            let after = if parser.consume_if_keyword(KeywordKind::After).is_some() {
+                Some(Expression::parse(parser)?)
+            } else {
+                None
+            };
+            Ok(WaveformElement::Null { after })
+        } else {
+            let expression = Expression::parse(parser)?;
+            let after = if parser.consume_if_keyword(KeywordKind::After).is_some() {
+                Some(Expression::parse(parser)?)
+            } else {
+                None
+            };
+            Ok(WaveformElement::Value { expression, after })
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -888,8 +1567,33 @@ impl AstNode for WaveformElement {
 }
 
 impl AstNode for ConditionalWaveforms {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // conditional_waveforms ::= waveform WHEN condition
+        //     { ELSE waveform WHEN condition } [ ELSE waveform ]
+        let first = ConditionalWaveformAlternative::parse(parser)?;
+        let mut alternatives = vec![first];
+        let mut else_waveform = None;
+
+        while parser.consume_if_keyword(KeywordKind::Else).is_some() {
+            // Could be another conditional alternative or the final else waveform.
+            let waveform = Waveform::parse(parser)?;
+            if parser.consume_if_keyword(KeywordKind::When).is_some() {
+                let condition = Expression::parse(parser)?;
+                alternatives.push(ConditionalWaveformAlternative {
+                    waveform,
+                    condition,
+                });
+            } else {
+                // Final else waveform (no WHEN).
+                else_waveform = Some(waveform);
+                break;
+            }
+        }
+
+        Ok(ConditionalWaveforms {
+            alternatives,
+            else_waveform,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -908,8 +1612,14 @@ impl AstNode for ConditionalWaveforms {
 }
 
 impl AstNode for ConditionalWaveformAlternative {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let waveform = Waveform::parse(parser)?;
+        parser.expect_keyword(KeywordKind::When)?;
+        let condition = Expression::parse(parser)?;
+        Ok(ConditionalWaveformAlternative {
+            waveform,
+            condition,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -920,8 +1630,13 @@ impl AstNode for ConditionalWaveformAlternative {
 }
 
 impl AstNode for SelectedWaveforms {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // selected_waveforms ::= { waveform WHEN choices , } waveform WHEN choices
+        let mut alternatives = vec![SelectedWaveformAlternative::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            alternatives.push(SelectedWaveformAlternative::parse(parser)?);
+        }
+        Ok(SelectedWaveforms { alternatives })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -930,8 +1645,11 @@ impl AstNode for SelectedWaveforms {
 }
 
 impl AstNode for SelectedWaveformAlternative {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let waveform = Waveform::parse(parser)?;
+        parser.expect_keyword(KeywordKind::When)?;
+        let choices = Choices::parse(parser)?;
+        Ok(SelectedWaveformAlternative { waveform, choices })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -942,8 +1660,14 @@ impl AstNode for SelectedWaveformAlternative {
 }
 
 impl AstNode for ForceMode {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::In).is_some() {
+            Ok(ForceMode::In)
+        } else if parser.consume_if_keyword(KeywordKind::Out).is_some() {
+            Ok(ForceMode::Out)
+        } else {
+            Err(parser.error("expected force mode (in or out)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -955,8 +1679,14 @@ impl AstNode for ForceMode {
 }
 
 impl AstNode for Target {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at(TokenKind::LeftParen) {
+            let aggregate = Aggregate::parse(parser)?;
+            Ok(Target::Aggregate(aggregate))
+        } else {
+            let name = Name::parse(parser)?;
+            Ok(Target::Name(name))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -968,8 +1698,24 @@ impl AstNode for Target {
 }
 
 impl AstNode for VariableAssignmentStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // This standalone parse handles:
+        //   target := ...  (simple/conditional)
+        //   WITH expr SELECT [?] target := ...  (selected)
+        if parser.at_keyword(KeywordKind::With) {
+            let assignment = SelectedVariableAssignment::parse(parser)?;
+            parser.expect(TokenKind::Semicolon)?;
+            Ok(VariableAssignmentStatement::Selected {
+                label: None,
+                assignment,
+            })
+        } else {
+            let target = Target::parse(parser)?;
+            parser.expect(TokenKind::VarAssign)?;
+            let result = parse_variable_assignment_after_assign(parser, target)?;
+            parser.expect(TokenKind::Semicolon)?;
+            Ok(result)
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1006,8 +1752,11 @@ impl AstNode for VariableAssignmentStatement {
 }
 
 impl AstNode for SimpleVariableAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::VarAssign)?;
+        let expression = Expression::parse(parser)?;
+        Ok(SimpleVariableAssignment { target, expression })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1018,8 +1767,14 @@ impl AstNode for SimpleVariableAssignment {
 }
 
 impl AstNode for ConditionalVariableAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::VarAssign)?;
+        let conditional_expressions = ConditionalExpressions::parse(parser)?;
+        Ok(ConditionalVariableAssignment {
+            target,
+            conditional_expressions,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1030,8 +1785,20 @@ impl AstNode for ConditionalVariableAssignment {
 }
 
 impl AstNode for SelectedVariableAssignment {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::With)?;
+        let selector = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Select)?;
+        let matching = parser.consume_if(TokenKind::QuestionMark).is_some();
+        let target = Target::parse(parser)?;
+        parser.expect(TokenKind::VarAssign)?;
+        let selected_expressions = SelectedExpressions::parse(parser)?;
+        Ok(SelectedVariableAssignment {
+            selector,
+            matching,
+            target,
+            selected_expressions,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1049,8 +1816,15 @@ impl AstNode for SelectedVariableAssignment {
 }
 
 impl AstNode for ProcedureCall {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // procedure_call ::= procedure_name [ ( actual_parameter_part ) ]
+        // Name::parse already handles suffixed forms including (args).
+        // We parse the name which may absorb the parenthesized arguments.
+        let procedure_name = Name::parse(parser)?;
+        Ok(ProcedureCall {
+            procedure_name,
+            parameters: None,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1065,8 +1839,13 @@ impl AstNode for ProcedureCall {
 }
 
 impl AstNode for ProcedureCallStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let procedure_call = ProcedureCall::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(ProcedureCallStatement {
+            label: None,
+            procedure_call,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1081,8 +1860,44 @@ impl AstNode for ProcedureCallStatement {
 }
 
 impl AstNode for IfStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::If)?;
+        let condition = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Then)?;
+        let then_statements = SequenceOfStatements::parse(parser)?;
+
+        let mut elsif_branches = Vec::new();
+        while parser.at_keyword(KeywordKind::Elsif) {
+            elsif_branches.push(ElsifBranch::parse(parser)?);
+        }
+
+        let else_statements = if parser.consume_if_keyword(KeywordKind::Else).is_some() {
+            Some(SequenceOfStatements::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::If)?;
+
+        let end_label =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(Label::parse(parser)?)
+            } else {
+                None
+            };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(IfStatement {
+            label: None,
+            condition,
+            then_statements,
+            elsif_branches,
+            else_statements,
+            end_label,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1118,8 +1933,15 @@ impl AstNode for IfStatement {
 }
 
 impl AstNode for ElsifBranch {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Elsif)?;
+        let condition = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Then)?;
+        let statements = SequenceOfStatements::parse(parser)?;
+        Ok(ElsifBranch {
+            condition,
+            statements,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1131,8 +1953,42 @@ impl AstNode for ElsifBranch {
 }
 
 impl AstNode for CaseStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::Case)?;
+        let matching = parser.consume_if(TokenKind::QuestionMark).is_some();
+        let expression = Expression::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+
+        let mut alternatives = Vec::new();
+        while parser.at_keyword(KeywordKind::When) {
+            alternatives.push(CaseStatementAlternative::parse(parser)?);
+        }
+
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::Case)?;
+
+        // Consume matching `?` at end if present.
+        if matching {
+            parser.consume_if(TokenKind::QuestionMark);
+        }
+
+        let end_label =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(Label::parse(parser)?)
+            } else {
+                None
+            };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(CaseStatement {
+            label: None,
+            matching,
+            expression,
+            alternatives,
+            end_label,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1165,8 +2021,15 @@ impl AstNode for CaseStatement {
 }
 
 impl AstNode for CaseStatementAlternative {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::When)?;
+        let choices = Choices::parse(parser)?;
+        parser.expect(TokenKind::Arrow)?;
+        let statements = SequenceOfStatements::parse(parser)?;
+        Ok(CaseStatementAlternative {
+            choices,
+            statements,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1179,8 +2042,36 @@ impl AstNode for CaseStatementAlternative {
 }
 
 impl AstNode for LoopStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        // Parse optional iteration scheme.
+        let iteration_scheme =
+            if parser.at_keyword(KeywordKind::While) || parser.at_keyword(KeywordKind::For) {
+                Some(IterationScheme::parse(parser)?)
+            } else {
+                None
+            };
+
+        parser.expect_keyword(KeywordKind::Loop)?;
+        let statements = SequenceOfStatements::parse(parser)?;
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::Loop)?;
+
+        let end_label =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(Label::parse(parser)?)
+            } else {
+                None
+            };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(LoopStatement {
+            label: None,
+            iteration_scheme,
+            statements,
+            end_label,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1206,8 +2097,16 @@ impl AstNode for LoopStatement {
 }
 
 impl AstNode for IterationScheme {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::While).is_some() {
+            let condition = Expression::parse(parser)?;
+            Ok(IterationScheme::While(condition))
+        } else if parser.consume_if_keyword(KeywordKind::For).is_some() {
+            let spec = ParameterSpecification::parse(parser)?;
+            Ok(IterationScheme::For(Box::new(spec)))
+        } else {
+            Err(parser.error("expected iteration scheme (while or for)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1225,8 +2124,14 @@ impl AstNode for IterationScheme {
 }
 
 impl AstNode for ParameterSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::In)?;
+        let discrete_range = DiscreteRange::parse(parser)?;
+        Ok(ParameterSpecification {
+            identifier,
+            discrete_range,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1237,8 +2142,33 @@ impl AstNode for ParameterSpecification {
 }
 
 impl AstNode for NextStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::Next)?;
+
+        // Optional loop label (identifier that is NOT the keyword WHEN).
+        let loop_label = if (parser.at(TokenKind::Identifier)
+            || parser.at(TokenKind::ExtendedIdentifier))
+            && !parser.at_keyword(KeywordKind::When)
+        {
+            Some(Label::parse(parser)?)
+        } else {
+            None
+        };
+
+        let condition = if parser.consume_if_keyword(KeywordKind::When).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(NextStatement {
+            label: None,
+            loop_label,
+            condition,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1261,8 +2191,33 @@ impl AstNode for NextStatement {
 }
 
 impl AstNode for ExitStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::Exit)?;
+
+        // Optional loop label (identifier that is NOT the keyword WHEN).
+        let loop_label = if (parser.at(TokenKind::Identifier)
+            || parser.at(TokenKind::ExtendedIdentifier))
+            && !parser.at_keyword(KeywordKind::When)
+        {
+            Some(Label::parse(parser)?)
+        } else {
+            None
+        };
+
+        let condition = if parser.consume_if_keyword(KeywordKind::When).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(ExitStatement {
+            label: None,
+            loop_label,
+            condition,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1285,8 +2240,22 @@ impl AstNode for ExitStatement {
 }
 
 impl AstNode for ReturnStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::Return)?;
+
+        let expression = if !parser.at(TokenKind::Semicolon) {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(ReturnStatement {
+            label: None,
+            expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1305,8 +2274,11 @@ impl AstNode for ReturnStatement {
 }
 
 impl AstNode for NullStatement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Label is handled by SequentialStatement::parse.
+        parser.expect_keyword(KeywordKind::Null)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(NullStatement { label: None })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

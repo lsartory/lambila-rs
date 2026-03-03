@@ -3,7 +3,8 @@
 use super::common::*;
 use super::name::Name;
 use super::node::AstNode;
-use crate::parser::{Parser, ParseError};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// A VHDL literal.
 ///
@@ -105,8 +106,42 @@ pub enum BaseSpecifier {
 // ---------------------------------------------------------------------------
 
 impl AstNode for Literal {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            // NULL literal
+            Some(TokenKind::Keyword(KeywordKind::Null)) => {
+                parser.consume();
+                Ok(Literal::Null)
+            }
+            // Bit string literal
+            Some(TokenKind::BitStringLiteral) => {
+                let bsl = BitStringLiteral::parse(parser)?;
+                Ok(Literal::BitString(bsl))
+            }
+            // String literal
+            Some(TokenKind::StringLiteral) => {
+                let sl = StringLiteral::parse(parser)?;
+                Ok(Literal::String(sl))
+            }
+            // Numeric literals (decimal, real, or based) -- may also be physical
+            Some(TokenKind::IntegerLiteral)
+            | Some(TokenKind::RealLiteral)
+            | Some(TokenKind::BasedLiteral) => {
+                let num = NumericLiteral::parse(parser)?;
+                Ok(Literal::Numeric(num))
+            }
+            // Character literal (enumeration literal)
+            Some(TokenKind::CharacterLiteral) => {
+                let el = EnumerationLiteral::parse(parser)?;
+                Ok(Literal::Enumeration(el))
+            }
+            // Identifier (enumeration literal)
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                let el = EnumerationLiteral::parse(parser)?;
+                Ok(Literal::Enumeration(el))
+            }
+            _ => Err(parser.error("expected literal")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -121,8 +156,22 @@ impl AstNode for Literal {
 }
 
 impl AstNode for NumericLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Parse the abstract literal first
+        let abstract_lit = AbstractLiteral::parse(parser)?;
+
+        // If the next token is an identifier, this is a physical literal (abstract + unit name)
+        match parser.peek_kind() {
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                let identifier = Identifier::parse(parser)?;
+                let unit_name = Name::Simple(SimpleName { identifier });
+                Ok(NumericLiteral::Physical(PhysicalLiteral {
+                    value: Some(abstract_lit),
+                    unit_name,
+                }))
+            }
+            _ => Ok(NumericLiteral::Abstract(abstract_lit)),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -134,8 +183,18 @@ impl AstNode for NumericLiteral {
 }
 
 impl AstNode for AbstractLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::BasedLiteral) => {
+                let based = BasedLiteral::parse(parser)?;
+                Ok(AbstractLiteral::Based(based))
+            }
+            Some(TokenKind::IntegerLiteral) | Some(TokenKind::RealLiteral) => {
+                let decimal = DecimalLiteral::parse(parser)?;
+                Ok(AbstractLiteral::Decimal(decimal))
+            }
+            _ => Err(parser.error("expected abstract literal (decimal or based)")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -147,8 +206,16 @@ impl AstNode for AbstractLiteral {
 }
 
 impl AstNode for DecimalLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::IntegerLiteral) | Some(TokenKind::RealLiteral) => {
+                let token = parser.consume().unwrap();
+                Ok(DecimalLiteral {
+                    text: token.text.clone(),
+                })
+            }
+            _ => Err(parser.error("expected decimal literal (integer or real)")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -157,8 +224,11 @@ impl AstNode for DecimalLiteral {
 }
 
 impl AstNode for BasedLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let token = parser.expect(TokenKind::BasedLiteral)?;
+        Ok(BasedLiteral {
+            text: token.text.clone(),
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -167,8 +237,20 @@ impl AstNode for BasedLiteral {
 }
 
 impl AstNode for PhysicalLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Optional abstract literal prefix
+        let value = match parser.peek_kind() {
+            Some(TokenKind::IntegerLiteral)
+            | Some(TokenKind::RealLiteral)
+            | Some(TokenKind::BasedLiteral) => Some(AbstractLiteral::parse(parser)?),
+            _ => None,
+        };
+
+        // Unit name (an identifier, represented as a Name)
+        let identifier = Identifier::parse(parser)?;
+        let unit_name = Name::Simple(SimpleName { identifier });
+
+        Ok(PhysicalLiteral { value, unit_name })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -181,8 +263,26 @@ impl AstNode for PhysicalLiteral {
 }
 
 impl AstNode for EnumerationLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::CharacterLiteral) => {
+                let token = parser.consume().unwrap();
+                // Strip surrounding single quotes from the character literal text
+                let inner = token
+                    .text
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'')
+                    .to_string();
+                Ok(EnumerationLiteral::CharacterLiteral(inner))
+            }
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                let id = Identifier::parse(parser)?;
+                Ok(EnumerationLiteral::Identifier(id))
+            }
+            _ => {
+                Err(parser.error("expected enumeration literal (identifier or character literal)"))
+            }
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -194,8 +294,15 @@ impl AstNode for EnumerationLiteral {
 }
 
 impl AstNode for StringLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let token = parser.expect(TokenKind::StringLiteral)?;
+        // Strip surrounding double quotes from the string literal text
+        let inner = token
+            .text
+            .trim_start_matches('"')
+            .trim_end_matches('"')
+            .to_string();
+        Ok(StringLiteral { text: inner })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -204,8 +311,11 @@ impl AstNode for StringLiteral {
 }
 
 impl AstNode for BitStringLiteral {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let token = parser.expect(TokenKind::BitStringLiteral)?;
+        Ok(BitStringLiteral {
+            text: token.text.clone(),
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -214,8 +324,35 @@ impl AstNode for BitStringLiteral {
 }
 
 impl AstNode for BaseSpecifier {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // BaseSpecifier is parsed from the text of a BitStringLiteral token.
+        // The format is: [integer] base_specifier " bit_value "
+        // We extract the base specifier letters that appear before the first '"'.
+        let token = parser.expect(TokenKind::BitStringLiteral)?;
+        let text = token.text.clone();
+
+        // Find the position of the first '"' to isolate the prefix
+        let quote_pos = text
+            .find('"')
+            .ok_or_else(|| parser.error("invalid bit string literal: missing '\"'"))?;
+        let prefix = &text[..quote_pos];
+
+        // Strip any leading digits (optional integer length in VHDL-2008)
+        let spec_str = prefix.trim_start_matches(|c: char| c.is_ascii_digit());
+
+        match spec_str.to_lowercase().as_str() {
+            "b" => Ok(BaseSpecifier::B),
+            "o" => Ok(BaseSpecifier::O),
+            "x" => Ok(BaseSpecifier::X),
+            "ub" => Ok(BaseSpecifier::UB),
+            "uo" => Ok(BaseSpecifier::UO),
+            "ux" => Ok(BaseSpecifier::UX),
+            "sb" => Ok(BaseSpecifier::SB),
+            "so" => Ok(BaseSpecifier::SO),
+            "sx" => Ok(BaseSpecifier::SX),
+            "d" => Ok(BaseSpecifier::D),
+            _ => Err(parser.error(format!("unknown base specifier: '{}'", spec_str))),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {

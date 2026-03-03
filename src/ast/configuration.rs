@@ -5,6 +5,7 @@ use super::expression::Expression;
 use super::name::Name;
 use super::node::{AstNode, format_comma_separated, format_lines, write_indent};
 use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF (VHDL-2008): `configuration_declaration ::= CONFIGURATION identifier OF entity_name IS
 ///     configuration_declarative_part { verification_unit_binding_indication ; }
@@ -181,8 +182,50 @@ pub enum InstantiationList {
 // ---------------------------------------------------------------------------
 
 impl AstNode for ConfigurationDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // CONFIGURATION identifier OF entity_name IS
+        //     configuration_declarative_part
+        //     { verification_unit_binding_indication ; }
+        //     block_configuration
+        // END [ CONFIGURATION ] [ configuration_simple_name ] ;
+        parser.expect_keyword(KeywordKind::Configuration)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Of)?;
+        let entity_name = SimpleName::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        let declarative_part = ConfigurationDeclarativePart::parse(parser)?;
+        // Parse optional verification_unit_binding_indications (USE VUNIT ...)
+        let mut verification_units = Vec::new();
+        while parser.at_keyword(KeywordKind::Use) {
+            // Check if this is USE VUNIT (verification unit) vs USE selected_name (use clause)
+            if let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Vunit)
+            {
+                let vu = VerificationUnitBindingIndication::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                verification_units.push(vu);
+                continue;
+            }
+            break;
+        }
+        let block_configuration = BlockConfiguration::parse(parser)?;
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.consume_if_keyword(KeywordKind::Configuration);
+        let end_name =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(SimpleName::parse(parser)?)
+            } else {
+                None
+            };
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(ConfigurationDeclaration {
+            identifier,
+            entity_name,
+            declarative_part,
+            verification_units,
+            block_configuration,
+            end_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -209,8 +252,24 @@ impl AstNode for ConfigurationDeclaration {
 }
 
 impl AstNode for ConfigurationDeclarativePart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // { configuration_declarative_item }
+        // Parse until FOR (start of block_configuration) or END or EOF
+        let mut items = Vec::new();
+        while !parser.at_keyword(KeywordKind::For)
+            && !parser.at_keyword(KeywordKind::End)
+            && !parser.eof()
+        {
+            // If USE VUNIT, stop — those are verification_unit_binding_indications
+            if parser.at_keyword(KeywordKind::Use)
+                && let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Vunit)
+            {
+                break;
+            }
+            items.push(ConfigurationDeclarativeItem::parse(parser)?);
+        }
+        Ok(ConfigurationDeclarativePart { items })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -219,8 +278,26 @@ impl AstNode for ConfigurationDeclarativePart {
 }
 
 impl AstNode for ConfigurationDeclarativeItem {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::Keyword(KeywordKind::Use)) => Ok(
+                ConfigurationDeclarativeItem::UseClause(super::context::UseClause::parse(parser)?),
+            ),
+            Some(TokenKind::Keyword(KeywordKind::Attribute)) => {
+                Ok(ConfigurationDeclarativeItem::AttributeSpecification(
+                    Box::new(super::attribute::AttributeSpecification::parse(parser)?),
+                ))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Group)) => {
+                Ok(ConfigurationDeclarativeItem::GroupDeclaration(Box::new(
+                    super::group::GroupDeclaration::parse(parser)?,
+                )))
+            }
+            _ => {
+                Err(parser
+                    .error("expected configuration declarative item (use, attribute, or group)"))
+            }
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -235,8 +312,40 @@ impl AstNode for ConfigurationDeclarativeItem {
 }
 
 impl AstNode for ConfigurationItem {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Both block_configuration and component_configuration start with FOR.
+        // Disambiguate: After FOR, if we see (identifier/ALL/OTHERS) followed by `:`,
+        // it's a component_configuration. Otherwise it's a block_configuration.
+        let save = parser.save();
+        parser.consume(); // FOR
+        // Check for component_specification pattern: instantiation_list `:` ...
+        let is_component = match parser.peek_kind() {
+            Some(TokenKind::Keyword(KeywordKind::All)) => {
+                parser.consume(); // ALL
+                parser.at(TokenKind::Colon)
+            }
+            Some(TokenKind::Keyword(KeywordKind::Others)) => {
+                parser.consume(); // OTHERS
+                parser.at(TokenKind::Colon)
+            }
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                // Could be label, label list, or block specification name.
+                // In component_spec: label {, label} : component_name
+                // In block_spec: name [( ... )]
+                // If we see identifier then `,` or `:`, it's component spec.
+                parser.consume(); // identifier
+                parser.at(TokenKind::Colon) || parser.at(TokenKind::Comma)
+            }
+            _ => false,
+        };
+        parser.restore(save);
+        if is_component {
+            Ok(ConfigurationItem::Component(ComponentConfiguration::parse(
+                parser,
+            )?))
+        } else {
+            Ok(ConfigurationItem::Block(BlockConfiguration::parse(parser)?))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -248,8 +357,64 @@ impl AstNode for ConfigurationItem {
 }
 
 impl AstNode for ConfigurationSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // FOR component_specification binding_indication ;
+        // Then check for verification_unit_binding_indication(s) and END FOR
+        parser.expect_keyword(KeywordKind::For)?;
+        let component_spec = ComponentSpecification::parse(parser)?;
+        let binding = BindingIndication::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+
+        // Check if there are verification_unit_binding_indications (USE VUNIT ...)
+        let mut verification_units = Vec::new();
+        while parser.at_keyword(KeywordKind::Use) {
+            if let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Vunit)
+            {
+                let vu = VerificationUnitBindingIndication::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                verification_units.push(vu);
+                continue;
+            }
+            break;
+        }
+
+        if !verification_units.is_empty() {
+            // Compound: must have END FOR ;
+            parser.expect_keyword(KeywordKind::End)?;
+            parser.expect_keyword(KeywordKind::For)?;
+            parser.expect(TokenKind::Semicolon)?;
+            Ok(ConfigurationSpecification::Compound(
+                CompoundConfigurationSpecification {
+                    component_spec,
+                    binding,
+                    verification_units,
+                },
+            ))
+        } else {
+            // Simple: optional END FOR ;
+            let has_end_for = if parser.at_keyword(KeywordKind::End) {
+                let save = parser.save();
+                parser.consume(); // END
+                if parser.at_keyword(KeywordKind::For) {
+                    parser.consume(); // FOR
+                    parser.expect(TokenKind::Semicolon)?;
+                    true
+                } else {
+                    parser.restore(save);
+                    false
+                }
+            } else {
+                false
+            };
+            Ok(ConfigurationSpecification::Simple(
+                SimpleConfigurationSpecification {
+                    component_spec,
+                    binding,
+                    has_end_for,
+                },
+            ))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -261,8 +426,31 @@ impl AstNode for ConfigurationSpecification {
 }
 
 impl AstNode for SimpleConfigurationSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // FOR component_specification binding_indication ; [ END FOR ; ]
+        parser.expect_keyword(KeywordKind::For)?;
+        let component_spec = ComponentSpecification::parse(parser)?;
+        let binding = BindingIndication::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        let has_end_for = if parser.at_keyword(KeywordKind::End) {
+            let save = parser.save();
+            parser.consume(); // END
+            if parser.at_keyword(KeywordKind::For) {
+                parser.consume(); // FOR
+                parser.expect(TokenKind::Semicolon)?;
+                true
+            } else {
+                parser.restore(save);
+                false
+            }
+        } else {
+            false
+        };
+        Ok(SimpleConfigurationSpecification {
+            component_spec,
+            binding,
+            has_end_for,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -281,8 +469,36 @@ impl AstNode for SimpleConfigurationSpecification {
 }
 
 impl AstNode for CompoundConfigurationSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // FOR component_specification binding_indication ;
+        //     verification_unit_binding_indication ; { verification_unit_binding_indication ; }
+        // END FOR ;
+        parser.expect_keyword(KeywordKind::For)?;
+        let component_spec = ComponentSpecification::parse(parser)?;
+        let binding = BindingIndication::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        let mut verification_units = Vec::new();
+        // At least one verification_unit_binding_indication required
+        loop {
+            if parser.at_keyword(KeywordKind::Use)
+                && let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Vunit)
+            {
+                let vu = VerificationUnitBindingIndication::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                verification_units.push(vu);
+                continue;
+            }
+            break;
+        }
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::For)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(CompoundConfigurationSpecification {
+            component_spec,
+            binding,
+            verification_units,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -302,8 +518,34 @@ impl AstNode for CompoundConfigurationSpecification {
 }
 
 impl AstNode for BlockConfiguration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // FOR block_specification { use_clause } { configuration_item } END FOR ;
+        parser.expect_keyword(KeywordKind::For)?;
+        let block_spec = BlockSpecification::parse(parser)?;
+        // Parse use clauses
+        let mut use_clauses = Vec::new();
+        while parser.at_keyword(KeywordKind::Use) {
+            // Check it's not USE VUNIT (verification unit)
+            if let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Vunit)
+            {
+                break;
+            }
+            use_clauses.push(super::context::UseClause::parse(parser)?);
+        }
+        // Parse configuration items (each starts with FOR)
+        let mut items = Vec::new();
+        while parser.at_keyword(KeywordKind::For) {
+            items.push(ConfigurationItem::parse(parser)?);
+        }
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::For)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(BlockConfiguration {
+            block_spec,
+            use_clauses,
+            items,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -319,8 +561,29 @@ impl AstNode for BlockConfiguration {
 }
 
 impl AstNode for BlockSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Parse a name (simple_name). If followed by `(` it's a generate with spec.
+        // We can't really distinguish architecture_name vs block_label vs generate_label
+        // syntactically — they're all simple names. We'll parse as Architecture/Generate
+        // based on whether there's a parenthesized spec.
+        let name = SimpleName::parse(parser)?;
+        if parser.at(TokenKind::LeftParen) {
+            // generate_statement_label ( generate_specification )
+            parser.consume(); // (
+            let spec = GenerateOrIndexSpecification::parse(parser)?;
+            parser.expect(TokenKind::RightParen)?;
+            Ok(BlockSpecification::Generate {
+                label: Label {
+                    identifier: name.identifier,
+                },
+                specification: Some(spec),
+            })
+        } else {
+            // Could be architecture_name, block_statement_label, or bare generate_label.
+            // We treat it as Architecture (the most common case; semantic analysis
+            // can reclassify).
+            Ok(BlockSpecification::Architecture(name))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -344,8 +607,19 @@ impl AstNode for BlockSpecification {
 }
 
 impl AstNode for GenerateOrIndexSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Try to parse as discrete_range first (using backtracking), then as expression.
+        // discrete_range has a direction keyword (TO or DOWNTO), so we try that first.
+        let save = parser.save();
+        match super::type_def::DiscreteRange::parse(parser) {
+            Ok(dr) => Ok(GenerateOrIndexSpecification::DiscreteRange(dr)),
+            Err(_) => {
+                parser.restore(save);
+                // Fall back to expression
+                let expr = Expression::parse(parser)?;
+                Ok(GenerateOrIndexSpecification::Expression(expr))
+            }
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -358,8 +632,74 @@ impl AstNode for GenerateOrIndexSpecification {
 }
 
 impl AstNode for ComponentConfiguration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // FOR component_specification
+        //     [ binding_indication ; ]
+        //     { verification_unit_binding_indication ; }
+        //     [ block_configuration ]
+        // END FOR ;
+        parser.expect_keyword(KeywordKind::For)?;
+        let component_spec = ComponentSpecification::parse(parser)?;
+
+        // Optional binding_indication (starts with USE, GENERIC, or PORT)
+        let binding = if parser.at_keyword(KeywordKind::Use)
+            || parser.at_keyword(KeywordKind::Generic)
+            || parser.at_keyword(KeywordKind::Port)
+        {
+            // But USE VUNIT is not a binding indication
+            if parser.at_keyword(KeywordKind::Use) {
+                if let Some(next) = parser.peek_nth(1) {
+                    if next.kind == TokenKind::Keyword(KeywordKind::Vunit) {
+                        None
+                    } else {
+                        let b = BindingIndication::parse(parser)?;
+                        parser.expect(TokenKind::Semicolon)?;
+                        Some(b)
+                    }
+                } else {
+                    let b = BindingIndication::parse(parser)?;
+                    parser.expect(TokenKind::Semicolon)?;
+                    Some(b)
+                }
+            } else {
+                let b = BindingIndication::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                Some(b)
+            }
+        } else {
+            None
+        };
+
+        // { verification_unit_binding_indication ; }
+        let mut verification_units = Vec::new();
+        while parser.at_keyword(KeywordKind::Use) {
+            if let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Vunit)
+            {
+                let vu = VerificationUnitBindingIndication::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                verification_units.push(vu);
+                continue;
+            }
+            break;
+        }
+
+        // [ block_configuration ] — starts with FOR
+        let block_configuration = if parser.at_keyword(KeywordKind::For) {
+            Some(BlockConfiguration::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::For)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(ComponentConfiguration {
+            component_spec,
+            binding,
+            verification_units,
+            block_configuration,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -384,8 +724,15 @@ impl AstNode for ComponentConfiguration {
 }
 
 impl AstNode for ComponentSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // instantiation_list : component_name
+        let instantiation_list = InstantiationList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let component_name = Box::new(Name::parse(parser)?);
+        Ok(ComponentSpecification {
+            instantiation_list,
+            component_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -396,8 +743,42 @@ impl AstNode for ComponentSpecification {
 }
 
 impl AstNode for BindingIndication {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // [ USE entity_aspect ] [ generic_map_aspect ] [ port_map_aspect ]
+        let entity_aspect = if parser.at_keyword(KeywordKind::Use) {
+            // But not USE VUNIT
+            if let Some(next) = parser.peek_nth(1) {
+                if next.kind == TokenKind::Keyword(KeywordKind::Vunit) {
+                    None
+                } else {
+                    parser.consume(); // USE
+                    Some(EntityAspect::parse(parser)?)
+                }
+            } else {
+                parser.consume(); // USE
+                Some(EntityAspect::parse(parser)?)
+            }
+        } else {
+            None
+        };
+
+        let generic_map_aspect = if parser.at_keyword(KeywordKind::Generic) {
+            Some(super::interface::GenericMapAspect::parse(parser)?)
+        } else {
+            None
+        };
+
+        let port_map_aspect = if parser.at_keyword(KeywordKind::Port) {
+            Some(super::interface::PortMapAspect::parse(parser)?)
+        } else {
+            None
+        };
+
+        Ok(BindingIndication {
+            entity_aspect,
+            generic_map_aspect,
+            port_map_aspect,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -418,8 +799,34 @@ impl AstNode for BindingIndication {
 }
 
 impl AstNode for EntityAspect {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // ENTITY entity_name [ ( architecture_identifier ) ]
+        // | CONFIGURATION configuration_name
+        // | OPEN
+        if parser.consume_if_keyword(KeywordKind::Entity).is_some() {
+            let entity_name = Box::new(Name::parse(parser)?);
+            let architecture = if parser.consume_if(TokenKind::LeftParen).is_some() {
+                let arch = Identifier::parse(parser)?;
+                parser.expect(TokenKind::RightParen)?;
+                Some(arch)
+            } else {
+                None
+            };
+            Ok(EntityAspect::Entity {
+                entity_name,
+                architecture,
+            })
+        } else if parser
+            .consume_if_keyword(KeywordKind::Configuration)
+            .is_some()
+        {
+            let name = Box::new(Name::parse(parser)?);
+            Ok(EntityAspect::Configuration(name))
+        } else if parser.consume_if_keyword(KeywordKind::Open).is_some() {
+            Ok(EntityAspect::Open)
+        } else {
+            Err(parser.error("expected entity aspect (entity, configuration, or open)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -447,8 +854,12 @@ impl AstNode for EntityAspect {
 }
 
 impl AstNode for VerificationUnitBindingIndication {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // USE VUNIT verification_unit_list
+        parser.expect_keyword(KeywordKind::Use)?;
+        parser.expect_keyword(KeywordKind::Vunit)?;
+        let unit_list = VerificationUnitList::parse(parser)?;
+        Ok(VerificationUnitBindingIndication { unit_list })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -459,8 +870,13 @@ impl AstNode for VerificationUnitBindingIndication {
 }
 
 impl AstNode for VerificationUnitList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // verification_unit_name { , verification_unit_name }
+        let mut names = vec![Box::new(Name::parse(parser)?)];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            names.push(Box::new(Name::parse(parser)?));
+        }
+        Ok(VerificationUnitList { names })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -475,8 +891,19 @@ impl AstNode for VerificationUnitList {
 }
 
 impl AstNode for InstantiationList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // ALL | OTHERS | instantiation_label { , instantiation_label }
+        if parser.consume_if_keyword(KeywordKind::All).is_some() {
+            Ok(InstantiationList::All)
+        } else if parser.consume_if_keyword(KeywordKind::Others).is_some() {
+            Ok(InstantiationList::Others)
+        } else {
+            let mut labels = vec![Label::parse(parser)?];
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                labels.push(Label::parse(parser)?);
+            }
+            Ok(InstantiationList::Labels(labels))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

@@ -32,7 +32,11 @@ pub mod parser;
 mod version;
 
 pub use lexer::token::{KeywordKind, LexError, LexResult, Span, Token, TokenKind};
+pub use parser::ParseError;
 pub use version::VhdlVersion;
+
+use ast::design_unit::DesignFile;
+use ast::node::AstNode;
 
 /// Lex a VHDL source string into tokens.
 ///
@@ -93,4 +97,22 @@ pub fn lex_file<P: AsRef<std::path::Path>>(
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     Ok(lex_reader(reader, version))
+}
+
+/// Parse a token stream into a VHDL design file AST.
+pub fn parse(tokens: &[Token]) -> Result<DesignFile, ParseError> {
+    let mut parser = parser::Parser::new(tokens);
+    DesignFile::parse(&mut parser)
+}
+
+/// Lex and parse a VHDL source string into an AST.
+pub fn parse_str(source: &str, version: VhdlVersion) -> Result<DesignFile, ParseError> {
+    let lex_result = lex(source, version);
+    if !lex_result.errors.is_empty() {
+        return Err(ParseError {
+            message: format!("lexer error: {}", lex_result.errors[0]),
+            span: Some(lex_result.errors[0].span),
+        });
+    }
+    parse(&lex_result.tokens)
 }

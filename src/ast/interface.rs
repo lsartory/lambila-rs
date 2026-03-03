@@ -3,9 +3,12 @@
 use super::common::*;
 use super::expression::Expression;
 use super::name::Name;
-use super::node::{AstNode, write_indent, format_comma_separated, format_semicolon_lines};
+use super::node::{
+    AstNode, format_comma_lines, format_comma_separated, format_semicolon_lines, write_indent,
+};
 use super::type_def::{SubtypeIndication, TypeMark};
-use crate::parser::{Parser, ParseError};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF (VHDL-2008): `interface_declaration ::= interface_object_declaration
 ///     | interface_type_declaration | interface_subprogram_declaration
@@ -201,8 +204,65 @@ pub struct PortMapAspect {
 // ---------------------------------------------------------------------------
 
 impl AstNode for InterfaceDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Discriminate by leading keyword
+        if parser.at_keyword(KeywordKind::Constant) {
+            let decl = InterfaceConstantDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Object(
+                InterfaceObjectDeclaration::Constant(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Signal) {
+            let decl = InterfaceSignalDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Object(
+                InterfaceObjectDeclaration::Signal(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Variable) {
+            let decl = InterfaceVariableDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Object(
+                InterfaceObjectDeclaration::Variable(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::File) {
+            let decl = InterfaceFileDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Object(
+                InterfaceObjectDeclaration::File(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Type) {
+            let decl = InterfaceIncompleteTypeDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Type(decl));
+        }
+
+        if parser.at_keyword(KeywordKind::Procedure)
+            || parser.at_keyword(KeywordKind::Function)
+            || parser.at_keyword(KeywordKind::Pure)
+            || parser.at_keyword(KeywordKind::Impure)
+        {
+            let decl = InterfaceSubprogramDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Subprogram(decl));
+        }
+
+        if parser.at_keyword(KeywordKind::Package) {
+            let decl = InterfacePackageDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Package(decl));
+        }
+
+        // No keyword prefix -- default to signal declaration (common in port lists)
+        // The identifier_list : [mode] subtype_indication pattern
+        if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+            let decl = InterfaceSignalDeclaration::parse(parser)?;
+            return Ok(InterfaceDeclaration::Object(
+                InterfaceObjectDeclaration::Signal(decl),
+            ));
+        }
+
+        Err(parser.error("expected interface declaration"))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -216,8 +276,16 @@ impl AstNode for InterfaceDeclaration {
 }
 
 impl AstNode for InterfaceList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut elements = vec![InterfaceElement::parse(parser)?];
+        while parser.consume_if(TokenKind::Semicolon).is_some() {
+            // Check if there's actually another element or if we hit closing paren / end
+            if parser.at(TokenKind::RightParen) || parser.eof() {
+                break;
+            }
+            elements.push(InterfaceElement::parse(parser)?);
+        }
+        Ok(InterfaceList { elements })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -226,8 +294,29 @@ impl AstNode for InterfaceList {
 }
 
 impl AstNode for InterfaceObjectDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at_keyword(KeywordKind::Constant) {
+            Ok(InterfaceObjectDeclaration::Constant(
+                InterfaceConstantDeclaration::parse(parser)?,
+            ))
+        } else if parser.at_keyword(KeywordKind::Signal) {
+            Ok(InterfaceObjectDeclaration::Signal(
+                InterfaceSignalDeclaration::parse(parser)?,
+            ))
+        } else if parser.at_keyword(KeywordKind::Variable) {
+            Ok(InterfaceObjectDeclaration::Variable(
+                InterfaceVariableDeclaration::parse(parser)?,
+            ))
+        } else if parser.at_keyword(KeywordKind::File) {
+            Ok(InterfaceObjectDeclaration::File(
+                InterfaceFileDeclaration::parse(parser)?,
+            ))
+        } else {
+            // Default to signal (for port list context)
+            Ok(InterfaceObjectDeclaration::Signal(
+                InterfaceSignalDeclaration::parse(parser)?,
+            ))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -241,8 +330,24 @@ impl AstNode for InterfaceObjectDeclaration {
 }
 
 impl AstNode for InterfaceConstantDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let has_constant_keyword = parser.consume_if_keyword(KeywordKind::Constant).is_some();
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let has_in_keyword = parser.consume_if_keyword(KeywordKind::In).is_some();
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        let default_expression = if parser.consume_if(TokenKind::VarAssign).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        Ok(InterfaceConstantDeclaration {
+            has_constant_keyword,
+            identifiers,
+            has_in_keyword,
+            subtype_indication,
+            default_expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -265,8 +370,38 @@ impl AstNode for InterfaceConstantDeclaration {
 }
 
 impl AstNode for InterfaceSignalDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let has_signal_keyword = parser.consume_if_keyword(KeywordKind::Signal).is_some();
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+
+        // Optional mode
+        let mode = if parser.at_keyword(KeywordKind::In)
+            || parser.at_keyword(KeywordKind::Out)
+            || parser.at_keyword(KeywordKind::Inout)
+            || parser.at_keyword(KeywordKind::Buffer)
+            || parser.at_keyword(KeywordKind::Linkage)
+        {
+            Some(Mode::parse(parser)?)
+        } else {
+            None
+        };
+
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        let has_bus = parser.consume_if_keyword(KeywordKind::Bus).is_some();
+        let default_expression = if parser.consume_if(TokenKind::VarAssign).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        Ok(InterfaceSignalDeclaration {
+            has_signal_keyword,
+            identifiers,
+            mode,
+            subtype_indication,
+            has_bus,
+            default_expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -293,8 +428,36 @@ impl AstNode for InterfaceSignalDeclaration {
 }
 
 impl AstNode for InterfaceVariableDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let has_variable_keyword = parser.consume_if_keyword(KeywordKind::Variable).is_some();
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+
+        // Optional mode
+        let mode = if parser.at_keyword(KeywordKind::In)
+            || parser.at_keyword(KeywordKind::Out)
+            || parser.at_keyword(KeywordKind::Inout)
+            || parser.at_keyword(KeywordKind::Buffer)
+            || parser.at_keyword(KeywordKind::Linkage)
+        {
+            Some(Mode::parse(parser)?)
+        } else {
+            None
+        };
+
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        let default_expression = if parser.consume_if(TokenKind::VarAssign).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        Ok(InterfaceVariableDeclaration {
+            has_variable_keyword,
+            identifiers,
+            mode,
+            subtype_indication,
+            default_expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -318,8 +481,15 @@ impl AstNode for InterfaceVariableDeclaration {
 }
 
 impl AstNode for InterfaceFileDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::File)?;
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        Ok(InterfaceFileDeclaration {
+            identifiers,
+            subtype_indication,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -332,8 +502,10 @@ impl AstNode for InterfaceFileDeclaration {
 }
 
 impl AstNode for InterfaceIncompleteTypeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Type)?;
+        let identifier = Identifier::parse(parser)?;
+        Ok(InterfaceIncompleteTypeDeclaration { identifier })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -344,8 +516,17 @@ impl AstNode for InterfaceIncompleteTypeDeclaration {
 }
 
 impl AstNode for InterfaceSubprogramDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let specification = InterfaceSubprogramSpecification::parse(parser)?;
+        let default = if parser.consume_if_keyword(KeywordKind::Is).is_some() {
+            Some(InterfaceSubprogramDefault::parse(parser)?)
+        } else {
+            None
+        };
+        Ok(InterfaceSubprogramDeclaration {
+            specification,
+            default,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -359,8 +540,19 @@ impl AstNode for InterfaceSubprogramDeclaration {
 }
 
 impl AstNode for InterfaceSubprogramSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at_keyword(KeywordKind::Procedure) {
+            let spec = InterfaceProcedureSpecification::parse(parser)?;
+            Ok(InterfaceSubprogramSpecification::Procedure(spec))
+        } else if parser.at_keyword(KeywordKind::Function)
+            || parser.at_keyword(KeywordKind::Pure)
+            || parser.at_keyword(KeywordKind::Impure)
+        {
+            let spec = InterfaceFunctionSpecification::parse(parser)?;
+            Ok(InterfaceSubprogramSpecification::Function(spec))
+        } else {
+            Err(parser.error("expected procedure or function specification"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -372,8 +564,29 @@ impl AstNode for InterfaceSubprogramSpecification {
 }
 
 impl AstNode for InterfaceProcedureSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Procedure)?;
+        let designator = Designator::parse(parser)?;
+
+        let mut has_parameter_keyword = false;
+        let parameter_list =
+            if parser.at_keyword(KeywordKind::Parameter) || parser.at(TokenKind::LeftParen) {
+                if parser.consume_if_keyword(KeywordKind::Parameter).is_some() {
+                    has_parameter_keyword = true;
+                }
+                parser.expect(TokenKind::LeftParen)?;
+                let list = InterfaceList::parse(parser)?;
+                parser.expect(TokenKind::RightParen)?;
+                Some(list)
+            } else {
+                None
+            };
+
+        Ok(InterfaceProcedureSpecification {
+            designator,
+            has_parameter_keyword,
+            parameter_list,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -384,17 +597,59 @@ impl AstNode for InterfaceProcedureSpecification {
             if self.has_parameter_keyword {
                 write!(f, " parameter")?;
             }
-            write!(f, " (")?;
-            params.format(f, indent_level)?;
-            write!(f, ")")?;
+            if params.elements.len() <= 1 {
+                write!(f, " (")?;
+                params.format(f, 0)?;
+                write!(f, ")")?;
+            } else {
+                writeln!(f, " (")?;
+                params.format(f, indent_level + 1)?;
+                writeln!(f)?;
+                write_indent(f, indent_level)?;
+                write!(f, ")")?;
+            }
         }
         Ok(())
     }
 }
 
 impl AstNode for InterfaceFunctionSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Optional PURE | IMPURE
+        let purity =
+            if parser.at_keyword(KeywordKind::Pure) || parser.at_keyword(KeywordKind::Impure) {
+                Some(Purity::parse(parser)?)
+            } else {
+                None
+            };
+
+        parser.expect_keyword(KeywordKind::Function)?;
+        let designator = Designator::parse(parser)?;
+
+        let mut has_parameter_keyword = false;
+        let parameter_list =
+            if parser.at_keyword(KeywordKind::Parameter) || parser.at(TokenKind::LeftParen) {
+                if parser.consume_if_keyword(KeywordKind::Parameter).is_some() {
+                    has_parameter_keyword = true;
+                }
+                parser.expect(TokenKind::LeftParen)?;
+                let list = InterfaceList::parse(parser)?;
+                parser.expect(TokenKind::RightParen)?;
+                Some(list)
+            } else {
+                None
+            };
+
+        parser.expect_keyword(KeywordKind::Return)?;
+        let return_type = TypeMark::parse(parser)?;
+
+        Ok(InterfaceFunctionSpecification {
+            purity,
+            designator,
+            has_parameter_keyword,
+            parameter_list,
+            return_type,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -409,9 +664,17 @@ impl AstNode for InterfaceFunctionSpecification {
             if self.has_parameter_keyword {
                 write!(f, " parameter")?;
             }
-            write!(f, " (")?;
-            params.format(f, indent_level)?;
-            write!(f, ")")?;
+            if params.elements.len() <= 1 {
+                write!(f, " (")?;
+                params.format(f, 0)?;
+                write!(f, ")")?;
+            } else {
+                writeln!(f, " (")?;
+                params.format(f, indent_level + 1)?;
+                writeln!(f)?;
+                write_indent(f, indent_level)?;
+                write!(f, ")")?;
+            }
         }
         write!(f, " return ")?;
         self.return_type.format(f, indent_level)
@@ -419,8 +682,14 @@ impl AstNode for InterfaceFunctionSpecification {
 }
 
 impl AstNode for Purity {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Pure).is_some() {
+            Ok(Purity::Pure)
+        } else if parser.consume_if_keyword(KeywordKind::Impure).is_some() {
+            Ok(Purity::Impure)
+        } else {
+            Err(parser.error("expected 'pure' or 'impure'"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -432,8 +701,14 @@ impl AstNode for Purity {
 }
 
 impl AstNode for InterfaceSubprogramDefault {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at(TokenKind::Box) {
+            parser.consume();
+            Ok(InterfaceSubprogramDefault::Box)
+        } else {
+            let name = Name::parse(parser)?;
+            Ok(InterfaceSubprogramDefault::Name(Box::new(name)))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -445,8 +720,18 @@ impl AstNode for InterfaceSubprogramDefault {
 }
 
 impl AstNode for InterfacePackageDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Package)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        parser.expect_keyword(KeywordKind::New)?;
+        let package_name = Box::new(Name::parse(parser)?);
+        let generic_map_aspect = InterfacePackageGenericMapAspect::parse(parser)?;
+        Ok(InterfacePackageDeclaration {
+            identifier,
+            package_name,
+            generic_map_aspect,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -461,8 +746,30 @@ impl AstNode for InterfacePackageDeclaration {
 }
 
 impl AstNode for InterfacePackageGenericMapAspect {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // GENERIC MAP ( <> ) | GENERIC MAP ( DEFAULT ) | generic_map_aspect
+        parser.expect_keyword(KeywordKind::Generic)?;
+        parser.expect_keyword(KeywordKind::Map)?;
+        parser.expect(TokenKind::LeftParen)?;
+
+        if parser.at(TokenKind::Box) {
+            parser.consume();
+            parser.expect(TokenKind::RightParen)?;
+            return Ok(InterfacePackageGenericMapAspect::Box);
+        }
+
+        if parser.at_keyword(KeywordKind::Default) {
+            parser.consume();
+            parser.expect(TokenKind::RightParen)?;
+            return Ok(InterfacePackageGenericMapAspect::Default);
+        }
+
+        // Regular association list
+        let association_list = super::association::AssociationList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        Ok(InterfacePackageGenericMapAspect::GenericMapAspect(
+            GenericMapAspect { association_list },
+        ))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -475,8 +782,13 @@ impl AstNode for InterfacePackageGenericMapAspect {
 }
 
 impl AstNode for GenericClause {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Generic)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let generic_list = InterfaceList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(GenericClause { generic_list })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -490,14 +802,19 @@ impl AstNode for GenericClause {
 }
 
 impl AstNode for GenericMapAspect {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Generic)?;
+        parser.expect_keyword(KeywordKind::Map)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let association_list = super::association::AssociationList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        Ok(GenericMapAspect { association_list })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
         write_indent(f, indent_level)?;
         writeln!(f, "generic map (")?;
-        format_comma_separated(&self.association_list.elements, f, indent_level + 1)?;
+        format_comma_lines(&self.association_list.elements, f, indent_level + 1)?;
         writeln!(f)?;
         write_indent(f, indent_level)?;
         write!(f, ")")
@@ -505,8 +822,13 @@ impl AstNode for GenericMapAspect {
 }
 
 impl AstNode for PortClause {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Port)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let port_list = InterfaceList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(PortClause { port_list })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -520,14 +842,19 @@ impl AstNode for PortClause {
 }
 
 impl AstNode for PortMapAspect {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Port)?;
+        parser.expect_keyword(KeywordKind::Map)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let association_list = super::association::AssociationList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        Ok(PortMapAspect { association_list })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
         write_indent(f, indent_level)?;
         writeln!(f, "port map (")?;
-        format_comma_separated(&self.association_list.elements, f, indent_level + 1)?;
+        format_comma_lines(&self.association_list.elements, f, indent_level + 1)?;
         writeln!(f)?;
         write_indent(f, indent_level)?;
         write!(f, ")")

@@ -1,7 +1,8 @@
 //! Common building-block types used throughout the AST.
 
 use super::node::AstNode;
-use crate::parser::{Parser, ParseError};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// An identifier — either basic or extended (VHDL-93+).
 ///
@@ -99,8 +100,24 @@ pub enum Sign {
 // ---------------------------------------------------------------------------
 
 impl AstNode for Identifier {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::Identifier) => {
+                let token = parser.consume().unwrap();
+                Ok(Identifier::Basic(token.text.clone()))
+            }
+            Some(TokenKind::ExtendedIdentifier) => {
+                let token = parser.consume().unwrap();
+                // Strip the surrounding backslashes from the extended identifier text
+                let inner = token
+                    .text
+                    .trim_start_matches('\\')
+                    .trim_end_matches('\\')
+                    .to_string();
+                Ok(Identifier::Extended(inner))
+            }
+            _ => Err(parser.error("expected identifier")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -112,8 +129,12 @@ impl AstNode for Identifier {
 }
 
 impl AstNode for IdentifierList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut identifiers = vec![Identifier::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            identifiers.push(Identifier::parse(parser)?);
+        }
+        Ok(IdentifierList { identifiers })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -128,8 +149,9 @@ impl AstNode for IdentifierList {
 }
 
 impl AstNode for Label {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let identifier = Identifier::parse(parser)?;
+        Ok(Label { identifier })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -138,8 +160,9 @@ impl AstNode for Label {
 }
 
 impl AstNode for SimpleName {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let identifier = Identifier::parse(parser)?;
+        Ok(SimpleName { identifier })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -148,8 +171,15 @@ impl AstNode for SimpleName {
 }
 
 impl AstNode for OperatorSymbol {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let token = parser.expect(TokenKind::StringLiteral)?;
+        // Strip the surrounding double quotes from the string literal text
+        let text = token.text.clone();
+        let inner = text
+            .trim_start_matches('"')
+            .trim_end_matches('"')
+            .to_string();
+        Ok(OperatorSymbol { text: inner })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -158,8 +188,18 @@ impl AstNode for OperatorSymbol {
 }
 
 impl AstNode for Designator {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::StringLiteral) => {
+                let op = OperatorSymbol::parse(parser)?;
+                Ok(Designator::OperatorSymbol(op))
+            }
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                let id = Identifier::parse(parser)?;
+                Ok(Designator::Identifier(id))
+            }
+            _ => Err(parser.error("expected designator (identifier or operator symbol)")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -171,8 +211,35 @@ impl AstNode for Designator {
 }
 
 impl AstNode for Signature {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use super::type_def::TypeMark;
+
+        parser.expect(TokenKind::LeftBracket)?;
+
+        let mut parameter_types = Vec::new();
+        let mut return_type = None;
+
+        // Check if we immediately see RETURN or `]`
+        if !parser.at(TokenKind::RightBracket) && !parser.at_keyword(KeywordKind::Return) {
+            // Parse the first type_mark
+            parameter_types.push(TypeMark::parse(parser)?);
+            // Parse additional comma-separated type_marks
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                parameter_types.push(TypeMark::parse(parser)?);
+            }
+        }
+
+        // Optional RETURN type_mark
+        if parser.consume_if_keyword(KeywordKind::Return).is_some() {
+            return_type = Some(TypeMark::parse(parser)?);
+        }
+
+        parser.expect(TokenKind::RightBracket)?;
+
+        Ok(Signature {
+            parameter_types,
+            return_type,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -195,8 +262,20 @@ impl AstNode for Signature {
 }
 
 impl AstNode for Mode {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::In).is_some() {
+            Ok(Mode::In)
+        } else if parser.consume_if_keyword(KeywordKind::Out).is_some() {
+            Ok(Mode::Out)
+        } else if parser.consume_if_keyword(KeywordKind::Inout).is_some() {
+            Ok(Mode::InOut)
+        } else if parser.consume_if_keyword(KeywordKind::Buffer).is_some() {
+            Ok(Mode::Buffer)
+        } else if parser.consume_if_keyword(KeywordKind::Linkage).is_some() {
+            Ok(Mode::Linkage)
+        } else {
+            Err(parser.error("expected mode (in, out, inout, buffer, or linkage)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -211,8 +290,14 @@ impl AstNode for Mode {
 }
 
 impl AstNode for Direction {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::To).is_some() {
+            Ok(Direction::To)
+        } else if parser.consume_if_keyword(KeywordKind::Downto).is_some() {
+            Ok(Direction::Downto)
+        } else {
+            Err(parser.error("expected direction (to or downto)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -224,8 +309,14 @@ impl AstNode for Direction {
 }
 
 impl AstNode for Sign {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if(TokenKind::Plus).is_some() {
+            Ok(Sign::Plus)
+        } else if parser.consume_if(TokenKind::Minus).is_some() {
+            Ok(Sign::Minus)
+        } else {
+            Err(parser.error("expected sign (+ or -)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {

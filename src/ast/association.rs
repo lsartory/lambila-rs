@@ -5,7 +5,8 @@ use super::interface::InterfaceList;
 use super::name::Name;
 use super::node::{AstNode, format_comma_separated};
 use super::type_def::{SubtypeIndication, TypeMark};
-use crate::parser::{Parser, ParseError};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF: `association_element ::= [ formal_part => ] actual_part`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,8 +87,25 @@ pub type ActualParameterPart = AssociationList;
 // ---------------------------------------------------------------------------
 
 impl AstNode for AssociationElement {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // association_element ::= [ formal_part => ] actual_part
+        // Use backtracking: save position, try to parse formal_part + =>.
+        // If arrow found, it has a formal part. Otherwise restore and parse just actual_part.
+        let save = parser.save();
+        let formal = if let Ok(fp) = FormalPart::parse(parser) {
+            if parser.consume_if(TokenKind::Arrow).is_some() {
+                Some(fp)
+            } else {
+                parser.restore(save);
+                None
+            }
+        } else {
+            parser.restore(save);
+            None
+        };
+
+        let actual = ActualPart::parse(parser)?;
+        Ok(AssociationElement { formal, actual })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -100,8 +118,12 @@ impl AstNode for AssociationElement {
 }
 
 impl AstNode for AssociationList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut elements = vec![AssociationElement::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            elements.push(AssociationElement::parse(parser)?);
+        }
+        Ok(AssociationList { elements })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -110,8 +132,9 @@ impl AstNode for AssociationList {
 }
 
 impl AstNode for FormalDesignator {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let name = Name::parse(parser)?;
+        Ok(FormalDesignator::Name(Box::new(name)))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -122,20 +145,35 @@ impl AstNode for FormalDesignator {
 }
 
 impl AstNode for FormalPart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // formal_part ::= formal_designator | function_name ( formal_designator )
+        //     | type_mark ( formal_designator )
+        // For simplicity: parse a name. If it's followed by '(' and then another name + ')',
+        // it could be a function/type conversion. But distinguishing function_name from type_mark
+        // requires semantic analysis. For now, parse as simple designator (a Name).
+        // The Name parser should handle indexed names like `func(signal_name)`.
+        let name = Name::parse(parser)?;
+        Ok(FormalPart::Designator(FormalDesignator::Name(Box::new(
+            name,
+        ))))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
         match self {
             FormalPart::Designator(desig) => desig.format(f, indent_level),
-            FormalPart::FunctionConversion { function_name, designator } => {
+            FormalPart::FunctionConversion {
+                function_name,
+                designator,
+            } => {
                 function_name.format(f, indent_level)?;
                 write!(f, "(")?;
                 designator.format(f, indent_level)?;
                 write!(f, ")")
             }
-            FormalPart::TypeConversion { type_mark, designator } => {
+            FormalPart::TypeConversion {
+                type_mark,
+                designator,
+            } => {
                 type_mark.format(f, indent_level)?;
                 write!(f, "(")?;
                 designator.format(f, indent_level)?;
@@ -146,13 +184,28 @@ impl AstNode for FormalPart {
 }
 
 impl AstNode for ActualDesignator {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // actual_designator ::= [INERTIAL] expression | OPEN
+        if parser.at_keyword(KeywordKind::Open) {
+            parser.consume();
+            return Ok(ActualDesignator::Open);
+        }
+
+        let inertial = parser.consume_if_keyword(KeywordKind::Inertial).is_some();
+
+        let expression = Expression::parse(parser)?;
+        Ok(ActualDesignator::Expression {
+            inertial,
+            expression: Box::new(expression),
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
         match self {
-            ActualDesignator::Expression { inertial, expression } => {
+            ActualDesignator::Expression {
+                inertial,
+                expression,
+            } => {
                 if *inertial {
                     write!(f, "inertial ")?;
                 }
@@ -166,20 +219,31 @@ impl AstNode for ActualDesignator {
 }
 
 impl AstNode for ActualPart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // actual_part ::= actual_designator | function_name ( actual_designator )
+        //     | type_mark ( actual_designator )
+        // For simplicity, parse as actual_designator. The Name/Expression parser
+        // will handle function calls and type conversions within expressions.
+        let designator = ActualDesignator::parse(parser)?;
+        Ok(ActualPart::Designator(designator))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
         match self {
             ActualPart::Designator(desig) => desig.format(f, indent_level),
-            ActualPart::FunctionConversion { function_name, designator } => {
+            ActualPart::FunctionConversion {
+                function_name,
+                designator,
+            } => {
                 function_name.format(f, indent_level)?;
                 write!(f, "(")?;
                 designator.format(f, indent_level)?;
                 write!(f, ")")
             }
-            ActualPart::TypeConversion { type_mark, designator } => {
+            ActualPart::TypeConversion {
+                type_mark,
+                designator,
+            } => {
                 type_mark.format(f, indent_level)?;
                 write!(f, "(")?;
                 designator.format(f, indent_level)?;

@@ -6,11 +6,12 @@ use super::literal::{EnumerationLiteral, PhysicalLiteral};
 use super::name::Name;
 use super::node::{AstNode, format_comma_separated, format_lines, write_indent};
 use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF: `type_declaration ::= full_type_declaration | incomplete_type_declaration`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDeclaration {
-    Full(FullTypeDeclaration),
+    Full(Box<FullTypeDeclaration>),
     Incomplete(IncompleteTypeDeclaration),
 }
 
@@ -382,8 +383,26 @@ pub struct RecordElementConstraint {
 // ---------------------------------------------------------------------------
 
 impl AstNode for TypeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Type)?;
+        let identifier = Identifier::parse(parser)?;
+
+        // Incomplete type declaration: TYPE identifier ;
+        if parser.consume_if(TokenKind::Semicolon).is_some() {
+            return Ok(TypeDeclaration::Incomplete(IncompleteTypeDeclaration {
+                identifier,
+            }));
+        }
+
+        // Full type declaration: TYPE identifier IS type_definition ;
+        parser.expect_keyword(KeywordKind::Is)?;
+        let type_definition = TypeDefinition::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+
+        Ok(TypeDeclaration::Full(Box::new(FullTypeDeclaration {
+            identifier,
+            type_definition,
+        })))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -395,8 +414,16 @@ impl AstNode for TypeDeclaration {
 }
 
 impl AstNode for FullTypeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Type)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        let type_definition = TypeDefinition::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(FullTypeDeclaration {
+            identifier,
+            type_definition,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -410,8 +437,11 @@ impl AstNode for FullTypeDeclaration {
 }
 
 impl AstNode for IncompleteTypeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Type)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(IncompleteTypeDeclaration { identifier })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -423,8 +453,84 @@ impl AstNode for IncompleteTypeDeclaration {
 }
 
 impl AstNode for TypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at(TokenKind::LeftParen) {
+            // Enumeration type definition: ( enumeration_literal { , enumeration_literal } )
+            let enum_def = EnumerationTypeDefinition::parse(parser)?;
+            return Ok(TypeDefinition::Scalar(ScalarTypeDefinition::Enumeration(
+                enum_def,
+            )));
+        }
+
+        if parser.at_keyword(KeywordKind::Range) {
+            // Could be integer, floating, or physical type definition
+            // All start with range_constraint. Physical has UNITS after.
+            let range_constraint = RangeConstraint::parse(parser)?;
+            if parser.at_keyword(KeywordKind::Units) {
+                // Physical type definition
+                parser.expect_keyword(KeywordKind::Units)?;
+                let primary_unit = PrimaryUnitDeclaration::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                let mut secondary_units = Vec::new();
+                while !parser.at_keyword(KeywordKind::End) {
+                    secondary_units.push(SecondaryUnitDeclaration::parse(parser)?);
+                    parser.expect(TokenKind::Semicolon)?;
+                }
+                parser.expect_keyword(KeywordKind::End)?;
+                parser.expect_keyword(KeywordKind::Units)?;
+                let end_name = if parser.at(TokenKind::Identifier)
+                    || parser.at(TokenKind::ExtendedIdentifier)
+                {
+                    Some(SimpleName::parse(parser)?)
+                } else {
+                    None
+                };
+                return Ok(TypeDefinition::Scalar(ScalarTypeDefinition::Physical(
+                    PhysicalTypeDefinition {
+                        range_constraint,
+                        primary_unit,
+                        secondary_units,
+                        end_name,
+                    },
+                )));
+            }
+            // Integer or floating -- we can't easily distinguish at the AST level,
+            // so default to integer. (Semantic analysis would distinguish them.)
+            return Ok(TypeDefinition::Scalar(ScalarTypeDefinition::Integer(
+                IntegerTypeDefinition { range_constraint },
+            )));
+        }
+
+        if parser.at_keyword(KeywordKind::Array) {
+            let array_def = ArrayTypeDefinition::parse(parser)?;
+            return Ok(TypeDefinition::Composite(CompositeTypeDefinition::Array(
+                array_def,
+            )));
+        }
+
+        if parser.at_keyword(KeywordKind::Record) {
+            let record_def = RecordTypeDefinition::parse(parser)?;
+            return Ok(TypeDefinition::Composite(CompositeTypeDefinition::Record(
+                record_def,
+            )));
+        }
+
+        if parser.at_keyword(KeywordKind::Access) {
+            let access_def = AccessTypeDefinition::parse(parser)?;
+            return Ok(TypeDefinition::Access(access_def));
+        }
+
+        if parser.at_keyword(KeywordKind::File) {
+            let file_def = FileTypeDefinition::parse(parser)?;
+            return Ok(TypeDefinition::File(file_def));
+        }
+
+        if parser.at_keyword(KeywordKind::Protected) {
+            let protected_def = ProtectedTypeDefinition::parse(parser)?;
+            return Ok(TypeDefinition::Protected(protected_def));
+        }
+
+        Err(parser.error("expected type definition"))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -439,8 +545,12 @@ impl AstNode for TypeDefinition {
 }
 
 impl AstNode for TypeMark {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // type_mark ::= type_name | subtype_name
+        // At the syntactic level we cannot distinguish between a type name and a subtype name.
+        // We parse a Name and wrap it as TypeName.
+        let name = Name::parse(parser)?;
+        Ok(TypeMark::TypeName(Box::new(name)))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -452,8 +562,45 @@ impl AstNode for TypeMark {
 }
 
 impl AstNode for ScalarTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at(TokenKind::LeftParen) {
+            let enum_def = EnumerationTypeDefinition::parse(parser)?;
+            return Ok(ScalarTypeDefinition::Enumeration(enum_def));
+        }
+
+        if parser.at_keyword(KeywordKind::Range) {
+            let range_constraint = RangeConstraint::parse(parser)?;
+            if parser.at_keyword(KeywordKind::Units) {
+                parser.expect_keyword(KeywordKind::Units)?;
+                let primary_unit = PrimaryUnitDeclaration::parse(parser)?;
+                parser.expect(TokenKind::Semicolon)?;
+                let mut secondary_units = Vec::new();
+                while !parser.at_keyword(KeywordKind::End) {
+                    secondary_units.push(SecondaryUnitDeclaration::parse(parser)?);
+                    parser.expect(TokenKind::Semicolon)?;
+                }
+                parser.expect_keyword(KeywordKind::End)?;
+                parser.expect_keyword(KeywordKind::Units)?;
+                let end_name = if parser.at(TokenKind::Identifier)
+                    || parser.at(TokenKind::ExtendedIdentifier)
+                {
+                    Some(SimpleName::parse(parser)?)
+                } else {
+                    None
+                };
+                return Ok(ScalarTypeDefinition::Physical(PhysicalTypeDefinition {
+                    range_constraint,
+                    primary_unit,
+                    secondary_units,
+                    end_name,
+                }));
+            }
+            return Ok(ScalarTypeDefinition::Integer(IntegerTypeDefinition {
+                range_constraint,
+            }));
+        }
+
+        Err(parser.error("expected scalar type definition"))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -467,8 +614,14 @@ impl AstNode for ScalarTypeDefinition {
 }
 
 impl AstNode for EnumerationTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect(TokenKind::LeftParen)?;
+        let mut literals = vec![EnumerationLiteral::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            literals.push(EnumerationLiteral::parse(parser)?);
+        }
+        parser.expect(TokenKind::RightParen)?;
+        Ok(EnumerationTypeDefinition { literals })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -479,8 +632,9 @@ impl AstNode for EnumerationTypeDefinition {
 }
 
 impl AstNode for IntegerTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let range_constraint = RangeConstraint::parse(parser)?;
+        Ok(IntegerTypeDefinition { range_constraint })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -489,8 +643,9 @@ impl AstNode for IntegerTypeDefinition {
 }
 
 impl AstNode for FloatingTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let range_constraint = RangeConstraint::parse(parser)?;
+        Ok(FloatingTypeDefinition { range_constraint })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -499,8 +654,30 @@ impl AstNode for FloatingTypeDefinition {
 }
 
 impl AstNode for PhysicalTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let range_constraint = RangeConstraint::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Units)?;
+        let primary_unit = PrimaryUnitDeclaration::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        let mut secondary_units = Vec::new();
+        while !parser.at_keyword(KeywordKind::End) {
+            secondary_units.push(SecondaryUnitDeclaration::parse(parser)?);
+            parser.expect(TokenKind::Semicolon)?;
+        }
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::Units)?;
+        let end_name =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(SimpleName::parse(parser)?)
+            } else {
+                None
+            };
+        Ok(PhysicalTypeDefinition {
+            range_constraint,
+            primary_unit,
+            secondary_units,
+            end_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -527,8 +704,9 @@ impl AstNode for PhysicalTypeDefinition {
 }
 
 impl AstNode for PrimaryUnitDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let identifier = Identifier::parse(parser)?;
+        Ok(PrimaryUnitDeclaration { identifier })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -537,8 +715,14 @@ impl AstNode for PrimaryUnitDeclaration {
 }
 
 impl AstNode for SecondaryUnitDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let identifier = Identifier::parse(parser)?;
+        parser.expect(TokenKind::Equals)?;
+        let literal = PhysicalLiteral::parse(parser)?;
+        Ok(SecondaryUnitDeclaration {
+            identifier,
+            literal,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -549,8 +733,16 @@ impl AstNode for SecondaryUnitDeclaration {
 }
 
 impl AstNode for CompositeTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at_keyword(KeywordKind::Array) {
+            let array_def = ArrayTypeDefinition::parse(parser)?;
+            Ok(CompositeTypeDefinition::Array(array_def))
+        } else if parser.at_keyword(KeywordKind::Record) {
+            let record_def = RecordTypeDefinition::parse(parser)?;
+            Ok(CompositeTypeDefinition::Record(record_def))
+        } else {
+            Err(parser.error("expected composite type definition (array or record)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -562,8 +754,54 @@ impl AstNode for CompositeTypeDefinition {
 }
 
 impl AstNode for ArrayTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Array)?;
+        parser.expect(TokenKind::LeftParen)?;
+
+        // Try to determine if this is unbounded or constrained.
+        // Unbounded: type_mark RANGE <> { , type_mark RANGE <> }
+        // Constrained: discrete_range { , discrete_range }
+        // Use backtracking: try parsing as index_subtype_definition first.
+        let save = parser.save();
+        let is_unbounded = {
+            // Try to parse: type_mark RANGE <>
+            let result = (|| -> Result<(), ParseError> {
+                let _tm = TypeMark::parse(parser)?;
+                parser.expect_keyword(KeywordKind::Range)?;
+                parser.expect(TokenKind::Box)?;
+                Ok(())
+            })();
+            result.is_ok()
+        };
+        parser.restore(save);
+
+        if is_unbounded {
+            let mut index_subtypes = vec![IndexSubtypeDefinition::parse(parser)?];
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                index_subtypes.push(IndexSubtypeDefinition::parse(parser)?);
+            }
+            parser.expect(TokenKind::RightParen)?;
+            parser.expect_keyword(KeywordKind::Of)?;
+            let element_subtype = SubtypeIndication::parse(parser)?;
+            Ok(ArrayTypeDefinition::Unbounded(UnboundedArrayDefinition {
+                index_subtypes,
+                element_subtype,
+            }))
+        } else {
+            let mut ranges = vec![DiscreteRange::parse(parser)?];
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                ranges.push(DiscreteRange::parse(parser)?);
+            }
+            parser.expect(TokenKind::RightParen)?;
+            parser.expect_keyword(KeywordKind::Of)?;
+            let element_subtype = SubtypeIndication::parse(parser)?;
+            Ok(ArrayTypeDefinition::Constrained(
+                ConstrainedArrayDefinition {
+                    index_constraint: IndexConstraint { ranges },
+                    element_subtype,
+                },
+            ))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -575,8 +813,20 @@ impl AstNode for ArrayTypeDefinition {
 }
 
 impl AstNode for UnboundedArrayDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Array)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let mut index_subtypes = vec![IndexSubtypeDefinition::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            index_subtypes.push(IndexSubtypeDefinition::parse(parser)?);
+        }
+        parser.expect(TokenKind::RightParen)?;
+        parser.expect_keyword(KeywordKind::Of)?;
+        let element_subtype = SubtypeIndication::parse(parser)?;
+        Ok(UnboundedArrayDefinition {
+            index_subtypes,
+            element_subtype,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -588,8 +838,15 @@ impl AstNode for UnboundedArrayDefinition {
 }
 
 impl AstNode for ConstrainedArrayDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Array)?;
+        let index_constraint = IndexConstraint::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Of)?;
+        let element_subtype = SubtypeIndication::parse(parser)?;
+        Ok(ConstrainedArrayDefinition {
+            index_constraint,
+            element_subtype,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -601,8 +858,22 @@ impl AstNode for ConstrainedArrayDefinition {
 }
 
 impl AstNode for RecordTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Record)?;
+        let mut elements = Vec::new();
+        while !parser.at_keyword(KeywordKind::End) {
+            elements.push(ElementDeclaration::parse(parser)?);
+            parser.expect(TokenKind::Semicolon)?;
+        }
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::Record)?;
+        let end_name =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(SimpleName::parse(parser)?)
+            } else {
+                None
+            };
+        Ok(RecordTypeDefinition { elements, end_name })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -622,8 +893,14 @@ impl AstNode for RecordTypeDefinition {
 }
 
 impl AstNode for ElementDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let subtype = ElementSubtypeDefinition::parse(parser)?;
+        Ok(ElementDeclaration {
+            identifiers,
+            subtype,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -635,8 +912,9 @@ impl AstNode for ElementDeclaration {
 }
 
 impl AstNode for ElementSubtypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        Ok(ElementSubtypeDefinition { subtype_indication })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -645,8 +923,10 @@ impl AstNode for ElementSubtypeDefinition {
 }
 
 impl AstNode for AccessTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Access)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        Ok(AccessTypeDefinition { subtype_indication })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -656,8 +936,11 @@ impl AstNode for AccessTypeDefinition {
 }
 
 impl AstNode for FileTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::File)?;
+        parser.expect_keyword(KeywordKind::Of)?;
+        let type_mark = TypeMark::parse(parser)?;
+        Ok(FileTypeDefinition { type_mark })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -667,8 +950,21 @@ impl AstNode for FileTypeDefinition {
 }
 
 impl AstNode for ProtectedTypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // PROTECTED is consumed, check if BODY follows
+        // Peek ahead: if next two tokens are PROTECTED BODY → ProtectedTypeBody
+        if parser.at_keyword(KeywordKind::Protected) {
+            // Check if BODY follows PROTECTED
+            if let Some(next) = parser.peek_nth(1)
+                && next.kind == TokenKind::Keyword(KeywordKind::Body)
+            {
+                let body = ProtectedTypeBody::parse(parser)?;
+                return Ok(ProtectedTypeDefinition::Body(body));
+            }
+            let decl = ProtectedTypeDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeDefinition::Declaration(decl));
+        }
+        Err(parser.error("expected protected type definition"))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -680,8 +976,21 @@ impl AstNode for ProtectedTypeDefinition {
 }
 
 impl AstNode for ProtectedTypeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Protected)?;
+        let declarative_part = ProtectedTypeDeclarativePart::parse(parser)?;
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::Protected)?;
+        let end_name =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(SimpleName::parse(parser)?)
+            } else {
+                None
+            };
+        Ok(ProtectedTypeDeclaration {
+            declarative_part,
+            end_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -698,8 +1007,12 @@ impl AstNode for ProtectedTypeDeclaration {
 }
 
 impl AstNode for ProtectedTypeDeclarativePart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut items = Vec::new();
+        while !parser.at_keyword(KeywordKind::End) && !parser.eof() {
+            items.push(ProtectedTypeDeclarativeItem::parse(parser)?);
+        }
+        Ok(ProtectedTypeDeclarativePart { items })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -708,8 +1021,32 @@ impl AstNode for ProtectedTypeDeclarativePart {
 }
 
 impl AstNode for ProtectedTypeDeclarativeItem {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Discriminate by leading keyword
+        if parser.at_keyword(KeywordKind::Procedure)
+            || parser.at_keyword(KeywordKind::Function)
+            || parser.at_keyword(KeywordKind::Pure)
+            || parser.at_keyword(KeywordKind::Impure)
+        {
+            let decl = super::subprogram::SubprogramDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeDeclarativeItem::SubprogramDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Attribute) {
+            let spec = super::attribute::AttributeSpecification::parse(parser)?;
+            return Ok(ProtectedTypeDeclarativeItem::AttributeSpecification(
+                Box::new(spec),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Use) {
+            let use_clause = super::context::UseClause::parse(parser)?;
+            return Ok(ProtectedTypeDeclarativeItem::UseClause(use_clause));
+        }
+
+        Err(parser.error("expected protected type declarative item"))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -723,8 +1060,23 @@ impl AstNode for ProtectedTypeDeclarativeItem {
 }
 
 impl AstNode for ProtectedTypeBody {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Protected)?;
+        parser.expect_keyword(KeywordKind::Body)?;
+        let declarative_part = ProtectedTypeBodyDeclarativePart::parse(parser)?;
+        parser.expect_keyword(KeywordKind::End)?;
+        parser.expect_keyword(KeywordKind::Protected)?;
+        parser.expect_keyword(KeywordKind::Body)?;
+        let end_name =
+            if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                Some(SimpleName::parse(parser)?)
+            } else {
+                None
+            };
+        Ok(ProtectedTypeBody {
+            declarative_part,
+            end_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -741,8 +1093,12 @@ impl AstNode for ProtectedTypeBody {
 }
 
 impl AstNode for ProtectedTypeBodyDeclarativePart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut items = Vec::new();
+        while !parser.at_keyword(KeywordKind::End) && !parser.eof() {
+            items.push(ProtectedTypeBodyDeclarativeItem::parse(parser)?);
+        }
+        Ok(ProtectedTypeBodyDeclarativePart { items })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -751,8 +1107,132 @@ impl AstNode for ProtectedTypeBodyDeclarativePart {
 }
 
 impl AstNode for ProtectedTypeBodyDeclarativeItem {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Discriminate by leading keyword
+        if parser.at_keyword(KeywordKind::Procedure)
+            || parser.at_keyword(KeywordKind::Function)
+            || parser.at_keyword(KeywordKind::Pure)
+            || parser.at_keyword(KeywordKind::Impure)
+        {
+            // Could be subprogram declaration or subprogram body.
+            // Try parsing as subprogram body first (it includes IS ... BEGIN ... END).
+            // Use backtracking: subprogram_body has IS after specification,
+            // subprogram_declaration has just ;
+            let save = parser.save();
+            if let Ok(body) = super::subprogram::SubprogramBody::parse(parser) {
+                return Ok(ProtectedTypeBodyDeclarativeItem::SubprogramBody(Box::new(
+                    body,
+                )));
+            }
+            parser.restore(save);
+            let decl = super::subprogram::SubprogramDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::SubprogramDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Package) {
+            // Could be package declaration, body, or instantiation
+            let save = parser.save();
+            if let Ok(body) = super::package::PackageBody::parse(parser) {
+                return Ok(ProtectedTypeBodyDeclarativeItem::PackageBody(Box::new(
+                    body,
+                )));
+            }
+            parser.restore(save);
+            if let Ok(inst) = super::package::PackageInstantiationDeclaration::parse(parser) {
+                return Ok(
+                    ProtectedTypeBodyDeclarativeItem::PackageInstantiationDeclaration(Box::new(
+                        inst,
+                    )),
+                );
+            }
+            parser.restore(save);
+            let decl = super::package::PackageDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::PackageDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Type) {
+            let decl = TypeDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::TypeDeclaration(Box::new(
+                decl,
+            )));
+        }
+
+        if parser.at_keyword(KeywordKind::Subtype) {
+            let decl = SubtypeDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::SubtypeDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Constant) {
+            let decl = super::object_decl::ConstantDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::ConstantDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Variable) || parser.at_keyword(KeywordKind::Shared) {
+            let decl = super::object_decl::VariableDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::VariableDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::File) {
+            let decl = super::object_decl::FileDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::FileDeclaration(Box::new(
+                decl,
+            )));
+        }
+
+        if parser.at_keyword(KeywordKind::Alias) {
+            let decl = super::object_decl::AliasDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::AliasDeclaration(
+                Box::new(decl),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Attribute) {
+            // Could be attribute declaration or attribute specification
+            // Attribute declaration: ATTRIBUTE identifier : type_mark ;
+            // Attribute specification: ATTRIBUTE designator OF entity_specification IS expression ;
+            let save = parser.save();
+            if let Ok(decl) = super::attribute::AttributeDeclaration::parse(parser) {
+                return Ok(ProtectedTypeBodyDeclarativeItem::AttributeDeclaration(
+                    Box::new(decl),
+                ));
+            }
+            parser.restore(save);
+            let spec = super::attribute::AttributeSpecification::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::AttributeSpecification(
+                Box::new(spec),
+            ));
+        }
+
+        if parser.at_keyword(KeywordKind::Use) {
+            let use_clause = super::context::UseClause::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::UseClause(use_clause));
+        }
+
+        if parser.at_keyword(KeywordKind::Group) {
+            let save = parser.save();
+            if let Ok(template) = super::group::GroupTemplateDeclaration::parse(parser) {
+                return Ok(ProtectedTypeBodyDeclarativeItem::GroupTemplateDeclaration(
+                    Box::new(template),
+                ));
+            }
+            parser.restore(save);
+            let group = super::group::GroupDeclaration::parse(parser)?;
+            return Ok(ProtectedTypeBodyDeclarativeItem::GroupDeclaration(
+                Box::new(group),
+            ));
+        }
+
+        Err(parser.error("expected protected type body declarative item"))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -779,8 +1259,16 @@ impl AstNode for ProtectedTypeBodyDeclarativeItem {
 }
 
 impl AstNode for SubtypeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Subtype)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(SubtypeDeclaration {
+            identifier,
+            subtype_indication,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -794,8 +1282,69 @@ impl AstNode for SubtypeDeclaration {
 }
 
 impl AstNode for SubtypeIndication {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // subtype_indication ::= [ resolution_indication ] type_mark [ constraint ]
+        //
+        // resolution_indication can be a function name (a name) or ( element_resolution ).
+        // type_mark is also a name.
+        // Strategy:
+        //   1. If we see '(' it could be resolution_indication (element_resolution) or constraint.
+        //      We handle parenthesized resolution below.
+        //   2. Otherwise, parse a name. Then check: if the next token starts another name
+        //      (identifier/extended identifier), the first name was the resolution function
+        //      and the second is the type_mark. Otherwise, the first name IS the type_mark.
+        //   3. After type_mark, optionally parse constraint.
+
+        let mut resolution = None;
+
+        // Check for parenthesized resolution_indication: ( element_resolution )
+        // This is distinct from a constraint paren because it contains resolution info.
+        // For simplicity, we don't try to parse element_resolution here --
+        // parenthesized forms are usually constraints on the type_mark.
+        // We just parse name-based resolution.
+
+        // Parse first name
+        let first_name = Name::parse(parser)?;
+
+        // Check if next token could start another name (i.e., first_name was a resolution function)
+        if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+            // First name is resolution_indication, second is type_mark
+            resolution = Some(ResolutionIndication::FunctionName(Box::new(first_name)));
+            let type_name = Name::parse(parser)?;
+            let type_mark = TypeMark::TypeName(Box::new(type_name));
+
+            // Optional constraint
+            let constraint = if parser.at_keyword(KeywordKind::Range) {
+                Some(Constraint::Range(RangeConstraint::parse(parser)?))
+            } else if parser.at(TokenKind::LeftParen) {
+                Some(Constraint::Index(IndexConstraint::parse(parser)?))
+            } else {
+                None
+            };
+
+            Ok(SubtypeIndication {
+                resolution,
+                type_mark,
+                constraint,
+            })
+        } else {
+            let type_mark = TypeMark::TypeName(Box::new(first_name));
+
+            // Optional constraint
+            let constraint = if parser.at_keyword(KeywordKind::Range) {
+                Some(Constraint::Range(RangeConstraint::parse(parser)?))
+            } else if parser.at(TokenKind::LeftParen) {
+                Some(Constraint::Index(IndexConstraint::parse(parser)?))
+            } else {
+                None
+            };
+
+            Ok(SubtypeIndication {
+                resolution,
+                type_mark,
+                constraint,
+            })
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -813,8 +1362,18 @@ impl AstNode for SubtypeIndication {
 }
 
 impl AstNode for ResolutionIndication {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at(TokenKind::LeftParen) {
+            // ( element_resolution )
+            parser.expect(TokenKind::LeftParen)?;
+            let element = ElementResolution::parse(parser)?;
+            parser.expect(TokenKind::RightParen)?;
+            Ok(ResolutionIndication::ElementResolution(Box::new(element)))
+        } else {
+            // resolution_function_name
+            let name = Name::parse(parser)?;
+            Ok(ResolutionIndication::FunctionName(Box::new(name)))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -830,8 +1389,27 @@ impl AstNode for ResolutionIndication {
 }
 
 impl AstNode for ElementResolution {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // element_resolution ::= array_element_resolution | record_resolution
+        // record_resolution contains record_element_resolution items: simple_name resolution_indication
+        // array_element_resolution is just resolution_indication
+        //
+        // Disambiguation: if we see an identifier followed by another name or '(',
+        // it could be record. Use backtracking.
+        let save = parser.save();
+        if let Ok(record) = RecordResolution::parse(parser) {
+            // Verify it parsed at least one element with a name + resolution
+            if !record.elements.is_empty() {
+                return Ok(ElementResolution::Record(record));
+            }
+        }
+        parser.restore(save);
+
+        // Array element resolution
+        let resolution = ResolutionIndication::parse(parser)?;
+        Ok(ElementResolution::Array(ArrayElementResolution {
+            resolution: Box::new(resolution),
+        }))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -843,8 +1421,11 @@ impl AstNode for ElementResolution {
 }
 
 impl AstNode for ArrayElementResolution {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let resolution = ResolutionIndication::parse(parser)?;
+        Ok(ArrayElementResolution {
+            resolution: Box::new(resolution),
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -853,8 +1434,12 @@ impl AstNode for ArrayElementResolution {
 }
 
 impl AstNode for RecordResolution {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut elements = vec![RecordElementResolution::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            elements.push(RecordElementResolution::parse(parser)?);
+        }
+        Ok(RecordResolution { elements })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -863,8 +1448,13 @@ impl AstNode for RecordResolution {
 }
 
 impl AstNode for RecordElementResolution {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let element_name = SimpleName::parse(parser)?;
+        let resolution = ResolutionIndication::parse(parser)?;
+        Ok(RecordElementResolution {
+            element_name,
+            resolution,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -875,8 +1465,18 @@ impl AstNode for RecordElementResolution {
 }
 
 impl AstNode for Constraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.at_keyword(KeywordKind::Range) {
+            let rc = RangeConstraint::parse(parser)?;
+            Ok(Constraint::Range(rc))
+        } else if parser.at(TokenKind::LeftParen) {
+            // Could be index_constraint, array_constraint, or record_constraint.
+            // For simplicity, parse as index_constraint (which covers the common case).
+            let ic = IndexConstraint::parse(parser)?;
+            Ok(Constraint::Index(ic))
+        } else {
+            Err(parser.error("expected constraint (range or '(')"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -890,8 +1490,10 @@ impl AstNode for Constraint {
 }
 
 impl AstNode for RangeConstraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Range)?;
+        let range = Range::parse(parser)?;
+        Ok(RangeConstraint { range })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -901,8 +1503,27 @@ impl AstNode for RangeConstraint {
 }
 
 impl AstNode for Range {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // range ::= range_attribute_name | simple_expression direction simple_expression
+        // Try: parse simple_expression, check if TO/DOWNTO follows.
+        // If so, it's an explicit range.
+        // If not, it should be a range_attribute_name (name'RANGE).
+        let save = parser.save();
+        if let Ok(left) = SimpleExpression::parse(parser)
+            && (parser.at_keyword(KeywordKind::To) || parser.at_keyword(KeywordKind::Downto))
+        {
+            let direction = Direction::parse(parser)?;
+            let right = SimpleExpression::parse(parser)?;
+            return Ok(Range::Explicit {
+                left,
+                direction,
+                right,
+            });
+        }
+        // Fall back to attribute name
+        parser.restore(save);
+        let name = Name::parse(parser)?;
+        Ok(Range::Attribute(Box::new(name)))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -924,8 +1545,45 @@ impl AstNode for Range {
 }
 
 impl AstNode for DiscreteRange {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // discrete_range ::= discrete_subtype_indication | range
+        // Use backtracking: try to parse as range first (explicit range with direction),
+        // then fall back to subtype_indication.
+        let save = parser.save();
+
+        // Try explicit range: simple_expression direction simple_expression
+        if let Ok(left) = SimpleExpression::parse(parser)
+            && (parser.at_keyword(KeywordKind::To) || parser.at_keyword(KeywordKind::Downto))
+        {
+            let direction = Direction::parse(parser)?;
+            let right = SimpleExpression::parse(parser)?;
+            return Ok(DiscreteRange::Range(Range::Explicit {
+                left,
+                direction,
+                right,
+            }));
+        }
+        parser.restore(save);
+
+        // Try as range_attribute_name (name'RANGE)
+        // We need to check if it looks like a name with 'RANGE attribute
+        let save2 = parser.save();
+        if let Ok(name) = Name::parse(parser) {
+            // Check if this was a range attribute name (ends with 'range)
+            if matches!(&name, Name::Attribute(attr) if {
+                let attr_name = &attr.designator.name.identifier;
+                matches!(attr_name, Identifier::Basic(s) if s.to_lowercase() == "range")
+            }) {
+                return Ok(DiscreteRange::Range(Range::Attribute(Box::new(name))));
+            }
+            // Not a range attribute -- could be a subtype_indication that starts with a name
+            // Restore and try subtype_indication
+        }
+        parser.restore(save2);
+
+        // Parse as subtype_indication
+        let subtype = SubtypeIndication::parse(parser)?;
+        Ok(DiscreteRange::SubtypeIndication(subtype))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -937,8 +1595,14 @@ impl AstNode for DiscreteRange {
 }
 
 impl AstNode for IndexConstraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect(TokenKind::LeftParen)?;
+        let mut ranges = vec![DiscreteRange::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            ranges.push(DiscreteRange::parse(parser)?);
+        }
+        parser.expect(TokenKind::RightParen)?;
+        Ok(IndexConstraint { ranges })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -949,8 +1613,11 @@ impl AstNode for IndexConstraint {
 }
 
 impl AstNode for IndexSubtypeDefinition {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let type_mark = TypeMark::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Range)?;
+        parser.expect(TokenKind::Box)?;
+        Ok(IndexSubtypeDefinition { type_mark })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -960,8 +1627,35 @@ impl AstNode for IndexSubtypeDefinition {
 }
 
 impl AstNode for ArrayConstraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect(TokenKind::LeftParen)?;
+        if parser.at_keyword(KeywordKind::Open) {
+            parser.consume();
+            parser.expect(TokenKind::RightParen)?;
+            let element_constraint = if parser.at(TokenKind::LeftParen) {
+                Some(Box::new(ElementConstraint::parse(parser)?))
+            } else {
+                None
+            };
+            Ok(ArrayConstraint::Open { element_constraint })
+        } else {
+            // Parse discrete ranges for index constraint
+            let mut ranges = vec![DiscreteRange::parse(parser)?];
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                ranges.push(DiscreteRange::parse(parser)?);
+            }
+            parser.expect(TokenKind::RightParen)?;
+            let index_constraint = IndexConstraint { ranges };
+            let element_constraint = if parser.at(TokenKind::LeftParen) {
+                Some(Box::new(ElementConstraint::parse(parser)?))
+            } else {
+                None
+            };
+            Ok(ArrayConstraint::IndexConstraint {
+                index_constraint,
+                element_constraint,
+            })
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -977,9 +1671,7 @@ impl AstNode for ArrayConstraint {
                 }
                 Ok(())
             }
-            Self::Open {
-                element_constraint,
-            } => {
+            Self::Open { element_constraint } => {
                 write!(f, "(open)")?;
                 if let Some(ec) = element_constraint {
                     write!(f, " ")?;
@@ -992,8 +1684,20 @@ impl AstNode for ArrayConstraint {
 }
 
 impl AstNode for ElementConstraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // element_constraint ::= array_constraint | record_constraint
+        // Both start with '('. Distinguish by content.
+        // Record constraint: ( simple_name element_constraint { , ... } )
+        // Array constraint: ( OPEN ) or ( discrete_range { , ... } )
+        //
+        // Use backtracking: try record_constraint first, fall back to array_constraint.
+        let save = parser.save();
+        if let Ok(record) = RecordConstraint::parse(parser) {
+            return Ok(ElementConstraint::Record(record));
+        }
+        parser.restore(save);
+        let array = ArrayConstraint::parse(parser)?;
+        Ok(ElementConstraint::Array(array))
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1005,8 +1709,14 @@ impl AstNode for ElementConstraint {
 }
 
 impl AstNode for RecordConstraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect(TokenKind::LeftParen)?;
+        let mut elements = vec![RecordElementConstraint::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            elements.push(RecordElementConstraint::parse(parser)?);
+        }
+        parser.expect(TokenKind::RightParen)?;
+        Ok(RecordConstraint { elements })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -1017,8 +1727,13 @@ impl AstNode for RecordConstraint {
 }
 
 impl AstNode for RecordElementConstraint {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let element_name = SimpleName::parse(parser)?;
+        let constraint = ElementConstraint::parse(parser)?;
+        Ok(RecordElementConstraint {
+            element_name,
+            constraint,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

@@ -3,9 +3,10 @@
 use super::common::*;
 use super::interface::GenericMapAspect;
 use super::name::Name;
-use super::node::{AstNode, write_indent, format_lines};
+use super::node::{AstNode, format_lines, write_indent};
 use super::type_def::TypeMark;
-use crate::parser::{Parser, ParseError};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF: `subprogram_declaration ::= subprogram_specification ;`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,8 +142,10 @@ pub struct SubprogramInstantiationDeclaration {
 // ---------------------------------------------------------------------------
 
 impl AstNode for SubprogramDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let specification = SubprogramSpecification::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(SubprogramDeclaration { specification })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -153,8 +156,39 @@ impl AstNode for SubprogramDeclaration {
 }
 
 impl AstNode for SubprogramBody {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let specification = SubprogramSpecification::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        let declarative_part = SubprogramDeclarativePart::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Begin)?;
+        let statement_part = SubprogramStatementPart::parse(parser)?;
+        parser.expect_keyword(KeywordKind::End)?;
+
+        // Optional subprogram_kind (PROCEDURE | FUNCTION)
+        let end_kind = if parser.at_keyword(KeywordKind::Procedure)
+            || parser.at_keyword(KeywordKind::Function)
+        {
+            Some(SubprogramKind::parse(parser)?)
+        } else {
+            None
+        };
+
+        // Optional designator
+        let end_designator = match parser.peek_kind() {
+            Some(TokenKind::Identifier)
+            | Some(TokenKind::ExtendedIdentifier)
+            | Some(TokenKind::StringLiteral) => Some(Designator::parse(parser)?),
+            _ => None,
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(SubprogramBody {
+            specification,
+            declarative_part,
+            statement_part,
+            end_kind,
+            end_designator,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -180,8 +214,18 @@ impl AstNode for SubprogramBody {
 }
 
 impl AstNode for SubprogramSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::Keyword(KeywordKind::Procedure)) => Ok(
+                SubprogramSpecification::Procedure(ProcedureSpecification::parse(parser)?),
+            ),
+            Some(TokenKind::Keyword(KeywordKind::Function))
+            | Some(TokenKind::Keyword(KeywordKind::Pure))
+            | Some(TokenKind::Keyword(KeywordKind::Impure)) => Ok(
+                SubprogramSpecification::Function(FunctionSpecification::parse(parser)?),
+            ),
+            _ => Err(parser.error("expected subprogram specification (procedure or function)")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -193,8 +237,34 @@ impl AstNode for SubprogramSpecification {
 }
 
 impl AstNode for ProcedureSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Procedure)?;
+        let designator = Designator::parse(parser)?;
+
+        // Optional subprogram_header (VHDL-2008): GENERIC ( generic_list ) [ generic_map_aspect ]
+        let header = if parser.at_keyword(KeywordKind::Generic) {
+            Some(SubprogramHeader::parse(parser)?)
+        } else {
+            None
+        };
+
+        // Optional [ PARAMETER ] ( formal_parameter_list )
+        let has_parameter_keyword = parser.consume_if_keyword(KeywordKind::Parameter).is_some();
+        let parameter_list = if parser.at(TokenKind::LeftParen) {
+            parser.expect(TokenKind::LeftParen)?;
+            let list = super::association::FormalParameterList::parse(parser)?;
+            parser.expect(TokenKind::RightParen)?;
+            Some(list)
+        } else {
+            None
+        };
+
+        Ok(ProcedureSpecification {
+            designator,
+            header,
+            has_parameter_keyword,
+            parameter_list,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -208,17 +278,64 @@ impl AstNode for ProcedureSpecification {
             write!(f, " parameter")?;
         }
         if let Some(params) = &self.parameter_list {
-            write!(f, " (")?;
-            params.format(f, indent_level)?;
-            write!(f, ")")?;
+            if params.elements.len() <= 1 {
+                write!(f, " (")?;
+                params.format(f, 0)?;
+                write!(f, ")")?;
+            } else {
+                writeln!(f, " (")?;
+                params.format(f, indent_level + 1)?;
+                writeln!(f)?;
+                write_indent(f, indent_level)?;
+                write!(f, ")")?;
+            }
         }
         Ok(())
     }
 }
 
 impl AstNode for FunctionSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // Optional PURE | IMPURE
+        let purity =
+            if parser.at_keyword(KeywordKind::Pure) || parser.at_keyword(KeywordKind::Impure) {
+                Some(super::interface::Purity::parse(parser)?)
+            } else {
+                None
+            };
+
+        parser.expect_keyword(KeywordKind::Function)?;
+        let designator = Designator::parse(parser)?;
+
+        // Optional subprogram_header (VHDL-2008): GENERIC ( generic_list ) [ generic_map_aspect ]
+        let header = if parser.at_keyword(KeywordKind::Generic) {
+            Some(SubprogramHeader::parse(parser)?)
+        } else {
+            None
+        };
+
+        // Optional [ PARAMETER ] ( formal_parameter_list )
+        let has_parameter_keyword = parser.consume_if_keyword(KeywordKind::Parameter).is_some();
+        let parameter_list = if parser.at(TokenKind::LeftParen) {
+            parser.expect(TokenKind::LeftParen)?;
+            let list = super::association::FormalParameterList::parse(parser)?;
+            parser.expect(TokenKind::RightParen)?;
+            Some(list)
+        } else {
+            None
+        };
+
+        parser.expect_keyword(KeywordKind::Return)?;
+        let return_type = TypeMark::parse(parser)?;
+
+        Ok(FunctionSpecification {
+            purity,
+            designator,
+            header,
+            has_parameter_keyword,
+            parameter_list,
+            return_type,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -236,9 +353,17 @@ impl AstNode for FunctionSpecification {
             write!(f, " parameter")?;
         }
         if let Some(params) = &self.parameter_list {
-            write!(f, " (")?;
-            params.format(f, indent_level)?;
-            write!(f, ")")?;
+            if params.elements.len() <= 1 {
+                write!(f, " (")?;
+                params.format(f, 0)?;
+                write!(f, ")")?;
+            } else {
+                writeln!(f, " (")?;
+                params.format(f, indent_level + 1)?;
+                writeln!(f)?;
+                write_indent(f, indent_level)?;
+                write!(f, ")")?;
+            }
         }
         write!(f, " return ")?;
         self.return_type.format(f, indent_level)
@@ -246,8 +371,24 @@ impl AstNode for FunctionSpecification {
 }
 
 impl AstNode for SubprogramHeader {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        // GENERIC ( generic_list ) [ generic_map_aspect ]
+        parser.expect_keyword(KeywordKind::Generic)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let generic_list = super::interface::GenericList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+
+        // Optional generic_map_aspect: GENERIC MAP ( ... )
+        let generic_map_aspect = if parser.at_keyword(KeywordKind::Generic) {
+            Some(GenericMapAspect::parse(parser)?)
+        } else {
+            None
+        };
+
+        Ok(SubprogramHeader {
+            generic_list,
+            generic_map_aspect,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -263,8 +404,14 @@ impl AstNode for SubprogramHeader {
 }
 
 impl AstNode for SubprogramKind {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Procedure).is_some() {
+            Ok(SubprogramKind::Procedure)
+        } else if parser.consume_if_keyword(KeywordKind::Function).is_some() {
+            Ok(SubprogramKind::Function)
+        } else {
+            Err(parser.error("expected subprogram kind (procedure or function)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -276,8 +423,12 @@ impl AstNode for SubprogramKind {
 }
 
 impl AstNode for SubprogramDeclarativePart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut items = Vec::new();
+        while !parser.at_keyword(KeywordKind::Begin) && !parser.eof() {
+            items.push(SubprogramDeclarativeItem::parse(parser)?);
+        }
+        Ok(SubprogramDeclarativePart { items })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -286,8 +437,215 @@ impl AstNode for SubprogramDeclarativePart {
 }
 
 impl AstNode for SubprogramDeclarativeItem {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::Keyword(KeywordKind::Type)) => {
+                Ok(SubprogramDeclarativeItem::TypeDeclaration(Box::new(
+                    super::type_def::TypeDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Subtype)) => {
+                Ok(SubprogramDeclarativeItem::SubtypeDeclaration(Box::new(
+                    super::type_def::SubtypeDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Constant)) => {
+                Ok(SubprogramDeclarativeItem::ConstantDeclaration(Box::new(
+                    super::object_decl::ConstantDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Variable)) => {
+                Ok(SubprogramDeclarativeItem::VariableDeclaration(Box::new(
+                    super::object_decl::VariableDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Shared)) => {
+                // SHARED VARIABLE
+                Ok(SubprogramDeclarativeItem::VariableDeclaration(Box::new(
+                    super::object_decl::VariableDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::File)) => {
+                Ok(SubprogramDeclarativeItem::FileDeclaration(Box::new(
+                    super::object_decl::FileDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Alias)) => {
+                Ok(SubprogramDeclarativeItem::AliasDeclaration(Box::new(
+                    super::object_decl::AliasDeclaration::parse(parser)?,
+                )))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Attribute)) => {
+                // Distinguish: ATTRIBUTE identifier : ... => declaration
+                //              ATTRIBUTE identifier OF ... => specification
+                // Look at token after ATTRIBUTE identifier
+                // peek(0) = ATTRIBUTE, peek(1) = identifier, peek(2) = : or OF
+                match parser.peek_nth(2).map(|t| t.kind) {
+                    Some(TokenKind::Colon) => Ok(SubprogramDeclarativeItem::AttributeDeclaration(
+                        Box::new(super::attribute::AttributeDeclaration::parse(parser)?),
+                    )),
+                    _ => {
+                        // Default to specification (OF case or error)
+                        Ok(SubprogramDeclarativeItem::AttributeSpecification(Box::new(
+                            super::attribute::AttributeSpecification::parse(parser)?,
+                        )))
+                    }
+                }
+            }
+            Some(TokenKind::Keyword(KeywordKind::Use)) => Ok(SubprogramDeclarativeItem::UseClause(
+                super::context::UseClause::parse(parser)?,
+            )),
+            Some(TokenKind::Keyword(KeywordKind::Group)) => {
+                // Distinguish: GROUP identifier IS ... => template declaration
+                //              GROUP identifier : ...  => group declaration
+                // peek(0) = GROUP, peek(1) = identifier, peek(2) = IS or :
+                match parser.peek_nth(2).map(|t| t.kind) {
+                    Some(TokenKind::Keyword(KeywordKind::Is)) => {
+                        Ok(SubprogramDeclarativeItem::GroupTemplateDeclaration(
+                            Box::new(super::group::GroupTemplateDeclaration::parse(parser)?),
+                        ))
+                    }
+                    _ => Ok(SubprogramDeclarativeItem::GroupDeclaration(Box::new(
+                        super::group::GroupDeclaration::parse(parser)?,
+                    ))),
+                }
+            }
+            Some(TokenKind::Keyword(KeywordKind::Procedure))
+            | Some(TokenKind::Keyword(KeywordKind::Function))
+            | Some(TokenKind::Keyword(KeywordKind::Pure))
+            | Some(TokenKind::Keyword(KeywordKind::Impure)) => {
+                // Could be: subprogram_declaration, subprogram_body, or
+                // subprogram_instantiation_declaration (VHDL-2008)
+                // Instantiation: subprogram_kind identifier IS NEW ...
+                // For PROCEDURE: peek(0)=PROCEDURE, peek(1)=identifier, peek(2)=IS, peek(3)=NEW
+                // For FUNCTION: may have PURE/IMPURE prefix
+
+                // Check for instantiation first
+                // For PROCEDURE: PROCEDURE identifier IS NEW
+                if parser.at_keyword(KeywordKind::Procedure)
+                    && let (Some(t2), Some(t3)) = (parser.peek_nth(1), parser.peek_nth(2))
+                    && (t2.kind == TokenKind::Identifier
+                        || t2.kind == TokenKind::ExtendedIdentifier)
+                    && t3.kind == TokenKind::Keyword(KeywordKind::Is)
+                    && let Some(t4) = parser.peek_nth(3)
+                    && t4.kind == TokenKind::Keyword(KeywordKind::New)
+                {
+                    return Ok(
+                        SubprogramDeclarativeItem::SubprogramInstantiationDeclaration(Box::new(
+                            SubprogramInstantiationDeclaration::parse(parser)?,
+                        )),
+                    );
+                }
+                // For FUNCTION or PURE/IMPURE FUNCTION: check similarly
+                if parser.at_keyword(KeywordKind::Function)
+                    && let (Some(t2), Some(t3)) = (parser.peek_nth(1), parser.peek_nth(2))
+                    && (t2.kind == TokenKind::Identifier
+                        || t2.kind == TokenKind::ExtendedIdentifier)
+                    && t3.kind == TokenKind::Keyword(KeywordKind::Is)
+                    && let Some(t4) = parser.peek_nth(3)
+                    && t4.kind == TokenKind::Keyword(KeywordKind::New)
+                {
+                    return Ok(
+                        SubprogramDeclarativeItem::SubprogramInstantiationDeclaration(Box::new(
+                            SubprogramInstantiationDeclaration::parse(parser)?,
+                        )),
+                    );
+                }
+                if parser.at_keyword(KeywordKind::Pure) || parser.at_keyword(KeywordKind::Impure) {
+                    // PURE/IMPURE FUNCTION identifier IS NEW ...
+                    if let (Some(t2), Some(t3), Some(t4)) =
+                        (parser.peek_nth(1), parser.peek_nth(2), parser.peek_nth(3))
+                        && t2.kind == TokenKind::Keyword(KeywordKind::Function)
+                        && (t3.kind == TokenKind::Identifier
+                            || t3.kind == TokenKind::ExtendedIdentifier)
+                        && t4.kind == TokenKind::Keyword(KeywordKind::Is)
+                        && let Some(t5) = parser.peek_nth(4)
+                        && t5.kind == TokenKind::Keyword(KeywordKind::New)
+                    {
+                        return Ok(
+                            SubprogramDeclarativeItem::SubprogramInstantiationDeclaration(
+                                Box::new(SubprogramInstantiationDeclaration::parse(parser)?),
+                            ),
+                        );
+                    }
+                }
+
+                // Not an instantiation, parse the specification then decide: ; => decl, IS => body
+                let specification = SubprogramSpecification::parse(parser)?;
+                if parser.at_keyword(KeywordKind::Is) {
+                    // Subprogram body
+                    parser.expect_keyword(KeywordKind::Is)?;
+                    let declarative_part = SubprogramDeclarativePart::parse(parser)?;
+                    parser.expect_keyword(KeywordKind::Begin)?;
+                    let statement_part = SubprogramStatementPart::parse(parser)?;
+                    parser.expect_keyword(KeywordKind::End)?;
+
+                    let end_kind = if parser.at_keyword(KeywordKind::Procedure)
+                        || parser.at_keyword(KeywordKind::Function)
+                    {
+                        Some(SubprogramKind::parse(parser)?)
+                    } else {
+                        None
+                    };
+
+                    let end_designator = match parser.peek_kind() {
+                        Some(TokenKind::Identifier)
+                        | Some(TokenKind::ExtendedIdentifier)
+                        | Some(TokenKind::StringLiteral) => Some(Designator::parse(parser)?),
+                        _ => None,
+                    };
+
+                    parser.expect(TokenKind::Semicolon)?;
+                    Ok(SubprogramDeclarativeItem::SubprogramBody(Box::new(
+                        SubprogramBody {
+                            specification,
+                            declarative_part,
+                            statement_part,
+                            end_kind,
+                            end_designator,
+                        },
+                    )))
+                } else {
+                    // Subprogram declaration (;)
+                    parser.expect(TokenKind::Semicolon)?;
+                    Ok(SubprogramDeclarativeItem::SubprogramDeclaration(Box::new(
+                        SubprogramDeclaration { specification },
+                    )))
+                }
+            }
+            Some(TokenKind::Keyword(KeywordKind::Package)) => {
+                // VHDL-2008: package_declaration, package_body, or package_instantiation_declaration
+                // PACKAGE BODY ... => PackageBody
+                // PACKAGE identifier IS NEW ... => PackageInstantiationDeclaration
+                // PACKAGE identifier IS ... => PackageDeclaration
+                if let Some(t2) = parser.peek_nth(1)
+                    && t2.kind == TokenKind::Keyword(KeywordKind::Body)
+                {
+                    return Ok(SubprogramDeclarativeItem::PackageBody(Box::new(
+                        super::package::PackageBody::parse(parser)?,
+                    )));
+                }
+                // Check for instantiation: PACKAGE identifier IS NEW
+                if let (Some(t2), Some(t3)) = (parser.peek_nth(1), parser.peek_nth(2))
+                    && (t2.kind == TokenKind::Identifier
+                        || t2.kind == TokenKind::ExtendedIdentifier)
+                    && t3.kind == TokenKind::Keyword(KeywordKind::Is)
+                    && let Some(t4) = parser.peek_nth(3)
+                    && t4.kind == TokenKind::Keyword(KeywordKind::New)
+                {
+                    return Ok(SubprogramDeclarativeItem::PackageInstantiationDeclaration(
+                        Box::new(super::package::PackageInstantiationDeclaration::parse(
+                            parser,
+                        )?),
+                    ));
+                }
+                // Otherwise, package declaration
+                Ok(SubprogramDeclarativeItem::PackageDeclaration(Box::new(
+                    super::package::PackageDeclaration::parse(parser)?,
+                )))
+            }
+            _ => Err(parser.error("expected subprogram declarative item")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -314,8 +672,12 @@ impl AstNode for SubprogramDeclarativeItem {
 }
 
 impl AstNode for SubprogramStatementPart {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut statements = Vec::new();
+        while !parser.at_keyword(KeywordKind::End) && !parser.eof() {
+            statements.push(super::sequential::SequentialStatement::parse(parser)?);
+        }
+        Ok(SubprogramStatementPart { statements })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -324,8 +686,35 @@ impl AstNode for SubprogramStatementPart {
 }
 
 impl AstNode for SubprogramInstantiationDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let kind = SubprogramKind::parse(parser)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        parser.expect_keyword(KeywordKind::New)?;
+        let subprogram_name = Box::new(Name::parse(parser)?);
+
+        // Optional signature (starts with `[`)
+        let signature = if parser.at(TokenKind::LeftBracket) {
+            Some(Signature::parse(parser)?)
+        } else {
+            None
+        };
+
+        // Optional generic_map_aspect: GENERIC MAP ( ... )
+        let generic_map_aspect = if parser.at_keyword(KeywordKind::Generic) {
+            Some(GenericMapAspect::parse(parser)?)
+        } else {
+            None
+        };
+
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(SubprogramInstantiationDeclaration {
+            kind,
+            identifier,
+            subprogram_name,
+            signature,
+            generic_map_aspect,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

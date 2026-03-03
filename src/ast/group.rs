@@ -3,8 +3,9 @@
 use super::attribute::EntityClassEntryList;
 use super::common::*;
 use super::name::Name;
-use super::node::{AstNode, write_indent, format_comma_separated};
-use crate::parser::{Parser, ParseError};
+use super::node::{AstNode, format_comma_separated, write_indent};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF: `group_template_declaration ::= GROUP identifier IS ( entity_class_entry_list ) ;`
 /// (VHDL-93+)
@@ -41,8 +42,18 @@ pub struct GroupConstituentList {
 // ---------------------------------------------------------------------------
 
 impl AstNode for GroupTemplateDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Group)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        parser.expect(TokenKind::LeftParen)?;
+        let entity_class_entry_list = EntityClassEntryList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(GroupTemplateDeclaration {
+            identifier,
+            entity_class_entry_list,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -56,8 +67,20 @@ impl AstNode for GroupTemplateDeclaration {
 }
 
 impl AstNode for GroupDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Group)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let template_name = Box::new(Name::parse(parser)?);
+        parser.expect(TokenKind::LeftParen)?;
+        let constituent_list = GroupConstituentList::parse(parser)?;
+        parser.expect(TokenKind::RightParen)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(GroupDeclaration {
+            identifier,
+            template_name,
+            constituent_list,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -73,8 +96,22 @@ impl AstNode for GroupDeclaration {
 }
 
 impl AstNode for GroupConstituent {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::CharacterLiteral) => {
+                let token = parser.consume().unwrap();
+                let ch = token
+                    .text
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'')
+                    .to_string();
+                Ok(GroupConstituent::CharacterLiteral(ch))
+            }
+            _ => {
+                let name = Name::parse(parser)?;
+                Ok(GroupConstituent::Name(name))
+            }
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -86,8 +123,12 @@ impl AstNode for GroupConstituent {
 }
 
 impl AstNode for GroupConstituentList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut constituents = vec![GroupConstituent::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            constituents.push(GroupConstituent::parse(parser)?);
+        }
+        Ok(GroupConstituentList { constituents })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

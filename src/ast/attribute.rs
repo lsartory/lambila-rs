@@ -2,9 +2,10 @@
 
 use super::common::*;
 use super::expression::Expression;
-use super::node::{AstNode, write_indent, format_comma_separated};
+use super::node::{AstNode, format_comma_separated, write_indent};
 use super::type_def::TypeMark;
-use crate::parser::{Parser, ParseError};
+use crate::parser::{ParseError, Parser};
+use crate::{KeywordKind, TokenKind};
 
 /// EBNF: `attribute_declaration ::= ATTRIBUTE identifier : type_mark ;`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,8 +111,16 @@ pub enum EntityTag {
 // ---------------------------------------------------------------------------
 
 impl AstNode for AttributeDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Attribute)?;
+        let identifier = Identifier::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let type_mark = TypeMark::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(AttributeDeclaration {
+            identifier,
+            type_mark,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -125,8 +134,19 @@ impl AstNode for AttributeDeclaration {
 }
 
 impl AstNode for AttributeSpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        parser.expect_keyword(KeywordKind::Attribute)?;
+        let designator = SimpleName::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Of)?;
+        let entity_specification = EntitySpecification::parse(parser)?;
+        parser.expect_keyword(KeywordKind::Is)?;
+        let expression = Expression::parse(parser)?;
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(AttributeSpecification {
+            designator,
+            entity_specification,
+            expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -142,8 +162,14 @@ impl AstNode for AttributeSpecification {
 }
 
 impl AstNode for EntitySpecification {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let name_list = EntityNameList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let entity_class = EntityClass::parse(parser)?;
+        Ok(EntitySpecification {
+            name_list,
+            entity_class,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -154,8 +180,54 @@ impl AstNode for EntitySpecification {
 }
 
 impl AstNode for EntityClass {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Entity).is_some() {
+            Ok(EntityClass::Entity)
+        } else if parser
+            .consume_if_keyword(KeywordKind::Architecture)
+            .is_some()
+        {
+            Ok(EntityClass::Architecture)
+        } else if parser
+            .consume_if_keyword(KeywordKind::Configuration)
+            .is_some()
+        {
+            Ok(EntityClass::Configuration)
+        } else if parser.consume_if_keyword(KeywordKind::Procedure).is_some() {
+            Ok(EntityClass::Procedure)
+        } else if parser.consume_if_keyword(KeywordKind::Function).is_some() {
+            Ok(EntityClass::Function)
+        } else if parser.consume_if_keyword(KeywordKind::Package).is_some() {
+            Ok(EntityClass::Package)
+        } else if parser.consume_if_keyword(KeywordKind::Type).is_some() {
+            Ok(EntityClass::Type)
+        } else if parser.consume_if_keyword(KeywordKind::Subtype).is_some() {
+            Ok(EntityClass::Subtype)
+        } else if parser.consume_if_keyword(KeywordKind::Constant).is_some() {
+            Ok(EntityClass::Constant)
+        } else if parser.consume_if_keyword(KeywordKind::Signal).is_some() {
+            Ok(EntityClass::Signal)
+        } else if parser.consume_if_keyword(KeywordKind::Variable).is_some() {
+            Ok(EntityClass::Variable)
+        } else if parser.consume_if_keyword(KeywordKind::Component).is_some() {
+            Ok(EntityClass::Component)
+        } else if parser.consume_if_keyword(KeywordKind::Label).is_some() {
+            Ok(EntityClass::Label)
+        } else if parser.consume_if_keyword(KeywordKind::Literal).is_some() {
+            Ok(EntityClass::Literal)
+        } else if parser.consume_if_keyword(KeywordKind::Units).is_some() {
+            Ok(EntityClass::Units)
+        } else if parser.consume_if_keyword(KeywordKind::Group).is_some() {
+            Ok(EntityClass::Group)
+        } else if parser.consume_if_keyword(KeywordKind::File).is_some() {
+            Ok(EntityClass::File)
+        } else if parser.consume_if_keyword(KeywordKind::Property).is_some() {
+            Ok(EntityClass::Property)
+        } else if parser.consume_if_keyword(KeywordKind::Sequence).is_some() {
+            Ok(EntityClass::Sequence)
+        } else {
+            Err(parser.error("expected entity class"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -184,8 +256,13 @@ impl AstNode for EntityClass {
 }
 
 impl AstNode for EntityClassEntry {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let entity_class = EntityClass::parse(parser)?;
+        let has_box = parser.consume_if(TokenKind::Box).is_some();
+        Ok(EntityClassEntry {
+            entity_class,
+            has_box,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -198,8 +275,12 @@ impl AstNode for EntityClassEntry {
 }
 
 impl AstNode for EntityClassEntryList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let mut entries = vec![EntityClassEntry::parse(parser)?];
+        while parser.consume_if(TokenKind::Comma).is_some() {
+            entries.push(EntityClassEntry::parse(parser)?);
+        }
+        Ok(EntityClassEntryList { entries })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -208,8 +289,15 @@ impl AstNode for EntityClassEntryList {
 }
 
 impl AstNode for EntityDesignator {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let tag = EntityTag::parse(parser)?;
+        // Optional signature (starts with `[`)
+        let signature = if parser.at(TokenKind::LeftBracket) {
+            Some(Signature::parse(parser)?)
+        } else {
+            None
+        };
+        Ok(EntityDesignator { tag, signature })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -223,8 +311,18 @@ impl AstNode for EntityDesignator {
 }
 
 impl AstNode for EntityNameList {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        if parser.consume_if_keyword(KeywordKind::Others).is_some() {
+            Ok(EntityNameList::Others)
+        } else if parser.consume_if_keyword(KeywordKind::All).is_some() {
+            Ok(EntityNameList::All)
+        } else {
+            let mut designators = vec![EntityDesignator::parse(parser)?];
+            while parser.consume_if(TokenKind::Comma).is_some() {
+                designators.push(EntityDesignator::parse(parser)?);
+            }
+            Ok(EntityNameList::Designators(designators))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -237,8 +335,28 @@ impl AstNode for EntityNameList {
 }
 
 impl AstNode for EntityTag {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::CharacterLiteral) => {
+                let token = parser.consume().unwrap();
+                let ch = token
+                    .text
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'')
+                    .to_string();
+                Ok(EntityTag::CharacterLiteral(ch))
+            }
+            Some(TokenKind::StringLiteral) => {
+                let op = OperatorSymbol::parse(parser)?;
+                Ok(EntityTag::OperatorSymbol(op))
+            }
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                let name = SimpleName::parse(parser)?;
+                Ok(EntityTag::SimpleName(name))
+            }
+            _ => Err(parser
+                .error("expected entity tag (simple name, character literal, or operator symbol)")),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

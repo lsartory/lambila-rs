@@ -38,6 +38,22 @@ pub fn format_comma_separated<T: AstNode>(
     Ok(())
 }
 
+/// Format a comma-separated list of items, each on its own indented line.
+pub fn format_comma_lines<T: AstNode>(
+    items: &[T],
+    f: &mut std::fmt::Formatter<'_>,
+    indent_level: usize,
+) -> std::fmt::Result {
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            writeln!(f, ",")?;
+        }
+        write_indent(f, indent_level)?;
+        item.format(f, indent_level)?;
+    }
+    Ok(())
+}
+
 /// Format a list of AST nodes, each on its own line at the given indent level.
 pub fn format_lines<T: AstNode>(
     items: &[T],

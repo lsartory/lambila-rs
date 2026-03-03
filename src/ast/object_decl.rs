@@ -5,7 +5,8 @@ use super::expression::Expression;
 use super::name::Name;
 use super::node::{AstNode, write_indent};
 use super::type_def::SubtypeIndication;
-use crate::parser::{Parser, ParseError};
+use crate::TokenKind;
+use crate::parser::{ParseError, Parser};
 
 /// EBNF: `object_declaration ::= constant_declaration | signal_declaration
 ///     | variable_declaration | file_declaration`
@@ -114,8 +115,32 @@ pub enum AliasDesignator {
 // ---------------------------------------------------------------------------
 
 impl AstNode for ObjectDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        match parser.peek_kind() {
+            Some(TokenKind::Keyword(KeywordKind::Constant)) => Ok(ObjectDeclaration::Constant(
+                ConstantDeclaration::parse(parser)?,
+            )),
+            Some(TokenKind::Keyword(KeywordKind::Signal)) => {
+                Ok(ObjectDeclaration::Signal(SignalDeclaration::parse(parser)?))
+            }
+            Some(TokenKind::Keyword(KeywordKind::Variable)) => Ok(ObjectDeclaration::Variable(
+                VariableDeclaration::parse(parser)?,
+            )),
+            Some(TokenKind::Keyword(KeywordKind::Shared)) => {
+                // SHARED VARIABLE
+                Ok(ObjectDeclaration::Variable(VariableDeclaration::parse(
+                    parser,
+                )?))
+            }
+            Some(TokenKind::Keyword(KeywordKind::File)) => {
+                Ok(ObjectDeclaration::File(FileDeclaration::parse(parser)?))
+            }
+            _ => {
+                Err(parser
+                    .error("expected object declaration (constant, signal, variable, or file)"))
+            }
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -129,8 +154,23 @@ impl AstNode for ObjectDeclaration {
 }
 
 impl AstNode for ConstantDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        parser.expect_keyword(KeywordKind::Constant)?;
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        let default_expression = if parser.consume_if(TokenKind::VarAssign).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(ConstantDeclaration {
+            identifiers,
+            subtype_indication,
+            default_expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -148,8 +188,30 @@ impl AstNode for ConstantDeclaration {
 }
 
 impl AstNode for SignalDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        parser.expect_keyword(KeywordKind::Signal)?;
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        let signal_kind =
+            if parser.at_keyword(KeywordKind::Register) || parser.at_keyword(KeywordKind::Bus) {
+                Some(SignalKind::parse(parser)?)
+            } else {
+                None
+            };
+        let default_expression = if parser.consume_if(TokenKind::VarAssign).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(SignalDeclaration {
+            identifiers,
+            subtype_indication,
+            signal_kind,
+            default_expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -171,8 +233,15 @@ impl AstNode for SignalDeclaration {
 }
 
 impl AstNode for SignalKind {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        if parser.consume_if_keyword(KeywordKind::Register).is_some() {
+            Ok(SignalKind::Register)
+        } else if parser.consume_if_keyword(KeywordKind::Bus).is_some() {
+            Ok(SignalKind::Bus)
+        } else {
+            Err(parser.error("expected signal kind (register or bus)"))
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, _indent_level: usize) -> std::fmt::Result {
@@ -184,8 +253,25 @@ impl AstNode for SignalKind {
 }
 
 impl AstNode for VariableDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        let shared = parser.consume_if_keyword(KeywordKind::Shared).is_some();
+        parser.expect_keyword(KeywordKind::Variable)?;
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+        let default_expression = if parser.consume_if(TokenKind::VarAssign).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(VariableDeclaration {
+            shared,
+            identifiers,
+            subtype_indication,
+            default_expression,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -206,8 +292,61 @@ impl AstNode for VariableDeclaration {
 }
 
 impl AstNode for FileDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        parser.expect_keyword(KeywordKind::File)?;
+        let identifiers = IdentifierList::parse(parser)?;
+        parser.expect(TokenKind::Colon)?;
+        let subtype_indication = SubtypeIndication::parse(parser)?;
+
+        // Try to parse VHDL-93+ file_open_information: [ OPEN expression ] IS file_logical_name
+        // or VHDL-87: IS [ mode ] file_logical_name
+        let mut open_information = None;
+        let mut mode = None;
+        let mut logical_name = None;
+
+        if parser.at_keyword(KeywordKind::Open) || parser.at_keyword(KeywordKind::Is) {
+            // Could be VHDL-93+ file_open_information or VHDL-87 form
+            // VHDL-93+: [ OPEN expression ] IS file_logical_name
+            // VHDL-87:  IS [ mode ] file_logical_name
+            // Both share the IS keyword. Distinguish by checking if OPEN comes first.
+            if parser.at_keyword(KeywordKind::Open) {
+                // VHDL-93+ form with OPEN
+                open_information = Some(FileOpenInformation::parse(parser)?);
+            } else {
+                // Starts with IS — could be either VHDL-87 or VHDL-93+ (without OPEN)
+                // VHDL-87: IS [ mode ] file_logical_name
+                // VHDL-93+: IS file_logical_name
+                // Try to detect VHDL-87 mode after IS
+                let save = parser.save();
+                parser.expect_keyword(KeywordKind::Is)?;
+
+                // Check if next token is a mode keyword (IN, OUT, INOUT, BUFFER, LINKAGE)
+                if parser.at_keyword(KeywordKind::In)
+                    || parser.at_keyword(KeywordKind::Out)
+                    || parser.at_keyword(KeywordKind::Inout)
+                    || parser.at_keyword(KeywordKind::Buffer)
+                    || parser.at_keyword(KeywordKind::Linkage)
+                {
+                    // VHDL-87 form
+                    mode = Some(Mode::parse(parser)?);
+                    logical_name = Some(FileLogicalName::parse(parser)?);
+                } else {
+                    // VHDL-93+ form: IS file_logical_name (no OPEN)
+                    parser.restore(save);
+                    open_information = Some(FileOpenInformation::parse(parser)?);
+                }
+            }
+        }
+
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(FileDeclaration {
+            identifiers,
+            subtype_indication,
+            open_information,
+            mode,
+            logical_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -233,8 +372,20 @@ impl AstNode for FileDeclaration {
 }
 
 impl AstNode for FileOpenInformation {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        // [ OPEN file_open_kind_expression ] IS file_logical_name
+        let open_kind = if parser.consume_if_keyword(KeywordKind::Open).is_some() {
+            Some(Expression::parse(parser)?)
+        } else {
+            None
+        };
+        parser.expect_keyword(KeywordKind::Is)?;
+        let logical_name = FileLogicalName::parse(parser)?;
+        Ok(FileOpenInformation {
+            open_kind,
+            logical_name,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -249,8 +400,9 @@ impl AstNode for FileOpenInformation {
 }
 
 impl AstNode for FileLogicalName {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        let expression = Expression::parse(parser)?;
+        Ok(FileLogicalName { expression })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -259,8 +411,30 @@ impl AstNode for FileLogicalName {
 }
 
 impl AstNode for AliasDeclaration {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        use crate::KeywordKind;
+        parser.expect_keyword(KeywordKind::Alias)?;
+        let designator = AliasDesignator::parse(parser)?;
+        let subtype_indication = if parser.consume_if(TokenKind::Colon).is_some() {
+            Some(SubtypeIndication::parse(parser)?)
+        } else {
+            None
+        };
+        parser.expect_keyword(KeywordKind::Is)?;
+        let name = Name::parse(parser)?;
+        // Optional signature (starts with `[`)
+        let signature = if parser.at(TokenKind::LeftBracket) {
+            Some(Signature::parse(parser)?)
+        } else {
+            None
+        };
+        parser.expect(TokenKind::Semicolon)?;
+        Ok(AliasDeclaration {
+            designator,
+            subtype_indication,
+            name,
+            signature,
+        })
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {
@@ -282,8 +456,30 @@ impl AstNode for AliasDeclaration {
 }
 
 impl AstNode for AliasDesignator {
-    fn parse(_parser: &mut Parser) -> Result<Self, ParseError> {
-        todo!()
+    fn parse(parser: &mut Parser) -> Result<Self, ParseError> {
+        match parser.peek_kind() {
+            Some(TokenKind::CharacterLiteral) => {
+                let token = parser.consume().unwrap();
+                // Strip surrounding quotes from character literal
+                let ch = token
+                    .text
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'')
+                    .to_string();
+                Ok(AliasDesignator::CharacterLiteral(ch))
+            }
+            Some(TokenKind::StringLiteral) => {
+                let op = OperatorSymbol::parse(parser)?;
+                Ok(AliasDesignator::OperatorSymbol(op))
+            }
+            Some(TokenKind::Identifier) | Some(TokenKind::ExtendedIdentifier) => {
+                let id = Identifier::parse(parser)?;
+                Ok(AliasDesignator::Identifier(id))
+            }
+            _ => Err(parser.error(
+                "expected alias designator (identifier, character literal, or operator symbol)",
+            )),
+        }
     }
 
     fn format(&self, f: &mut std::fmt::Formatter<'_>, indent_level: usize) -> std::fmt::Result {

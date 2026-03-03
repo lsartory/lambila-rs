@@ -171,6 +171,11 @@ impl<R: BufRead> Lexer<R> {
 
     /// Returns true if the previous non-whitespace token would make a `'`
     /// an attribute tick rather than the start of a character literal.
+    ///
+    /// In VHDL, `'` is an attribute tick only when preceded by a token that
+    /// can end a name: identifiers, `)`, `all`, or a right bracket `]`.
+    /// After any other token (keywords like `else`, `then`, `when`, operators,
+    /// etc.) `'` starts a character literal.
     fn prev_token_is_tick_context(&self) -> bool {
         if let Some(prev) = self.tokens.last() {
             matches!(
@@ -178,9 +183,10 @@ impl<R: BufRead> Lexer<R> {
                 TokenKind::Identifier
                     | TokenKind::ExtendedIdentifier
                     | TokenKind::RightParen
+                    | TokenKind::RightBracket
                     | TokenKind::Keyword(KeywordKind::All)
                     | TokenKind::CharacterLiteral
-            ) || prev.kind.is_keyword()
+            )
         } else {
             false
         }
