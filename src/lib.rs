@@ -1,6 +1,6 @@
-//! # Lambila — VHDL Lexer & Parser Library
+//! # Lambila — VHDL Lexer Library
 //!
-//! A Rust library that lexes and parses VHDL source, supporting
+//! A Rust library that lexes VHDL source into tokens, supporting
 //! three language versions:
 //!
 //! - **VHDL-1987** (IEEE Std 1076-1987) — 81 keywords
@@ -11,7 +11,7 @@
 //! source, so files can be lexed without loading them entirely into
 //! memory.
 //!
-//! ## Lexer Usage
+//! ## Usage
 //!
 //! ```rust
 //! use lambila::{lex, VhdlVersion, TokenKind};
@@ -25,45 +25,12 @@
 //!
 //! assert!(result.errors.is_empty());
 //! ```
-//!
-//! ## Parser Usage
-//!
-//! ```rust
-//! use lambila::{parse, VhdlVersion};
-//!
-//! let source = "entity my_entity is end entity my_entity;";
-//! let result = parse(source, VhdlVersion::Vhdl1993);
-//!
-//! println!("{:#?}", result.design_file);
-//!
-//! assert!(result.errors.is_empty());
-//! ```
-//!
-//! ## Exporter Usage
-//!
-//! ```rust
-//! use lambila::{parse, VhdlVersion};
-//! use lambila::exporter::Exporter;
-//!
-//! let source = "entity my_entity is end entity my_entity;";
-//! let result = parse(source, VhdlVersion::Vhdl1993);
-//!
-//! let mut output = Vec::new();
-//! let mut exporter = Exporter::new(&mut output);
-//! exporter.export_design_file(&result.design_file).unwrap();
-//!
-//! let formatted = String::from_utf8(output).unwrap();
-//! println!("{}", formatted);
-//! ```
 
-pub mod exporter;
+pub mod ast;
 mod lexer;
-mod parser;
 mod version;
 
 pub use lexer::token::{KeywordKind, LexError, LexResult, Span, Token, TokenKind};
-pub use parser::ast;
-pub use parser::{ParseError, ParseResult};
 pub use version::VhdlVersion;
 
 /// Lex a VHDL source string into tokens.
@@ -125,60 +92,4 @@ pub fn lex_file<P: AsRef<std::path::Path>>(
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     Ok(lex_reader(reader, version))
-}
-
-/// Parse a VHDL source string into an AST.
-///
-/// This is a convenience wrapper that first lexes the source, then
-/// parses the resulting tokens.
-pub fn parse(source: &str, version: VhdlVersion) -> ParseResult {
-    let lex_result = lex(source, version);
-    parser::Parser::new(lex_result.tokens, version).parse()
-}
-
-/// Parse a VHDL source from any buffered reader.
-pub fn parse_reader<R: std::io::BufRead>(reader: R, version: VhdlVersion) -> ParseResult {
-    let lex_result = lex_reader(reader, version);
-    parser::Parser::new(lex_result.tokens, version).parse()
-}
-
-/// Read a VHDL file from disk, lex it, and parse the resulting tokens.
-///
-/// # Errors
-///
-/// Returns an [`std::io::Error`] if the file cannot be opened.
-pub fn parse_file<P: AsRef<std::path::Path>>(
-    path: P,
-    version: VhdlVersion,
-) -> std::io::Result<ParseResult> {
-    let lex_result = lex_file(path, version)?;
-    Ok(parser::Parser::new(lex_result.tokens, version).parse())
-}
-
-/// Parse a VHDL file and write the formatted AST back to the output path
-///
-/// # Errors
-/// Returns an [`std::io::Error`] if files cannot be opened or if writes fail.
-pub fn export_file<P: AsRef<std::path::Path>, O: AsRef<std::path::Path>>(
-    input_path: P,
-    output_path: O,
-    version: VhdlVersion,
-) -> std::io::Result<()> {
-    let parse_result = parse_file(input_path, version)?;
-    if !parse_result.errors.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("{} parse errors", parse_result.errors.len()),
-        ));
-    }
-
-    let file = std::fs::File::create(output_path)?;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut exporter = exporter::Exporter::new(&mut writer);
-    exporter.export_design_file(&parse_result.design_file)?;
-
-    // Explicitly flush safely
-    use std::io::Write;
-    writer.flush()?;
-    Ok(())
 }
