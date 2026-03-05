@@ -27,9 +27,10 @@
 //! ```
 
 pub mod ast;
-mod lexer;
+pub mod lexer;
 pub mod parser;
-mod version;
+pub mod project;
+pub mod version;
 
 pub use lexer::token::{KeywordKind, LexError, LexResult, Span, Token, TokenKind};
 pub use parser::ParseError;
