@@ -247,6 +247,15 @@ impl<R: BufRead> Lexer<R> {
                 continue;
             }
 
+            // Tool directive: `
+            // Skip rest of line (like a comment)
+            if self.peek() == b'`' {
+                while !self.at_end() && self.peek() != b'\n' {
+                    self.advance();
+                }
+                continue;
+            }
+
             break;
         }
     }
@@ -291,11 +300,17 @@ impl<R: BufRead> Lexer<R> {
 
             // ── Tick → character literal or attribute tick ───────────────
             b'\'' => {
-                if !self.prev_token_is_tick_context()
-                    && self.peek_at(1) != 0
-                    && self.peek_at(2) == b'\''
-                {
-                    self.lex_character_literal(start, start_line, start_col);
+                if !self.prev_token_is_tick_context() && self.peek_at(1) != 0 {
+                    // Determine how many bytes the character occupies (UTF-8 aware)
+                    let first = self.peek_at(1);
+                    let char_len = utf8_char_len(first);
+                    if self.peek_at(1 + char_len) == b'\'' {
+                        self.lex_character_literal(start, start_line, start_col);
+                    } else {
+                        self.current_text.clear();
+                        self.advance_into_text();
+                        self.emit_current(TokenKind::Tick, start, start_line, start_col);
+                    }
                 } else {
                     self.current_text.clear();
                     self.advance_into_text();
@@ -418,6 +433,27 @@ impl<R: BufRead> Lexer<R> {
 
             // ── Percent sign (character replacement for ") ──────────────
             b'%' => self.lex_string_literal_percent(start, start_line, start_col),
+
+            // ── High bytes (0x80..=0xFF) → UTF-8 continuation / leading bytes ─
+            // Skip over them gracefully so the lexer can continue.
+            0x80..=0xFF => {
+                self.current_text.clear();
+                // Consume all bytes belonging to this UTF-8 sequence
+                let char_len = utf8_char_len(ch);
+                for _ in 0..char_len {
+                    if !self.at_end() {
+                        self.advance_into_text();
+                    }
+                }
+                self.error(
+                    &format!("unexpected character '{}'", self.current_text),
+                    start,
+                    self.pos,
+                    start_line,
+                    start_col,
+                );
+                self.emit_current(TokenKind::Error, start, start_line, start_col);
+            }
 
             // ── Unknown character ───────────────────────────────────────
             _ => {
@@ -631,7 +667,12 @@ impl<R: BufRead> Lexer<R> {
     fn lex_character_literal(&mut self, start: usize, start_line: u32, start_col: u32) {
         self.current_text.clear();
         self.advance_into_text(); // opening '
-        self.advance_into_text(); // the character
+        // Consume all bytes of the character (may be multi-byte UTF-8)
+        let first = self.peek();
+        let char_len = utf8_char_len(first);
+        for _ in 0..char_len {
+            self.advance_into_text();
+        }
         self.advance_into_text(); // closing '
         self.emit_current(TokenKind::CharacterLiteral, start, start_line, start_col);
     }
@@ -800,6 +841,17 @@ impl<R: BufRead> Lexer<R> {
 
 fn is_whitespace(ch: u8) -> bool {
     matches!(ch, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
+}
+
+/// Return the expected byte-length of a UTF-8 character given its first byte.
+fn utf8_char_len(first: u8) -> usize {
+    match first {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1, // continuation byte or invalid — treat as single byte
+    }
 }
 
 #[cfg(test)]

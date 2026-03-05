@@ -1,5 +1,6 @@
 //! Name-related AST nodes.
 
+use super::association::AssociationList;
 use super::common::*;
 use super::expression::Expression;
 use super::node::{AstNode, format_comma_separated};
@@ -22,6 +23,8 @@ pub enum Name {
     Indexed(Box<IndexedName>),
     Slice(Box<SliceName>),
     Attribute(Box<AttributeName>),
+    /// Function/procedure call with (possibly named) association list.
+    FunctionCall(Box<FunctionCall>),
     /// VHDL-2008 external name.
     External(Box<ExternalName>),
 }
@@ -267,24 +270,37 @@ impl AstNode for Name {
                     }
                 }
                 // `[` -> Signature followed by `'` for AttributeName
+                // Use backtracking: if no tick follows the signature, break out
+                // so the caller (e.g. AliasDeclaration::parse) can handle the `[`.
                 Some(TokenKind::LeftBracket) => {
-                    let signature = Signature::parse(parser)?;
-                    parser.expect(TokenKind::Tick)?;
-                    let designator = AttributeDesignator::parse(parser)?;
-                    let expression = if parser.at(TokenKind::LeftParen) {
-                        parser.consume();
-                        let expr = Expression::parse(parser)?;
-                        parser.expect(TokenKind::RightParen)?;
-                        Some(Box::new(expr))
+                    let bracket_save = parser.save();
+                    if let Ok(signature) = Signature::parse(parser) {
+                        if parser.consume_if(TokenKind::Tick).is_some() {
+                            let designator = AttributeDesignator::parse(parser)?;
+                            let expression = if parser.at(TokenKind::LeftParen) {
+                                parser.consume();
+                                let expr = Expression::parse(parser)?;
+                                parser.expect(TokenKind::RightParen)?;
+                                Some(Box::new(expr))
+                            } else {
+                                None
+                            };
+                            name = Name::Attribute(Box::new(AttributeName {
+                                prefix: Prefix::Name(Box::new(name)),
+                                signature: Some(signature),
+                                designator,
+                                expression,
+                            }));
+                        } else {
+                            // No tick after signature — not an attribute name.
+                            // Restore and let the caller handle the `[`.
+                            parser.restore(bracket_save);
+                            break;
+                        }
                     } else {
-                        None
-                    };
-                    name = Name::Attribute(Box::new(AttributeName {
-                        prefix: Prefix::Name(Box::new(name)),
-                        signature: Some(signature),
-                        designator,
-                        expression,
-                    }));
+                        parser.restore(bracket_save);
+                        break;
+                    }
                 }
                 _ => break,
             }
@@ -302,6 +318,7 @@ impl AstNode for Name {
             Name::Indexed(n) => n.format(f, indent_level),
             Name::Slice(n) => n.format(f, indent_level),
             Name::Attribute(n) => n.format(f, indent_level),
+            Name::FunctionCall(n) => n.format(f, indent_level),
             Name::External(n) => n.format(f, indent_level),
         }
     }
@@ -346,7 +363,8 @@ fn parse_base_name(parser: &mut Parser) -> Result<Name, ParseError> {
 }
 
 /// Parse a parenthesized suffix after a name: could be indexed, slice, or function call.
-/// Disambiguate by checking for TO/DOWNTO (discrete_range -> slice) vs expression list (indexed).
+/// Disambiguate by checking for TO/DOWNTO (discrete_range -> slice),
+/// named associations (function call), or expression list (indexed).
 fn parse_paren_suffix(parser: &mut Parser, prefix_name: Name) -> Result<Name, ParseError> {
     parser.expect(TokenKind::LeftParen)?;
 
@@ -359,17 +377,58 @@ fn parse_paren_suffix(parser: &mut Parser, prefix_name: Name) -> Result<Name, Pa
         })));
     }
 
-    // Parse the first expression and check if it contains TO/DOWNTO for a discrete_range.
-    // We need to try parsing as a discrete_range first, then fall back to expression list.
+    // Try parsing as an AssociationList first (handles named associations like `formal => actual`).
+    // Use backtracking so we can fall back to expression-based parsing if needed.
     let save = parser.save();
+    if let Ok(assoc_list) = AssociationList::parse(parser)
+        && parser.at(TokenKind::RightParen)
+    {
+        parser.consume();
 
-    // Try to parse as a single expression, then check for TO/DOWNTO
+        // Check if any element uses named association
+        let has_named = assoc_list.elements.iter().any(|e| e.formal.is_some());
+        if has_named {
+            return Ok(Name::FunctionCall(Box::new(FunctionCall {
+                function_name: Box::new(prefix_name),
+                parameters: Some(assoc_list),
+            })));
+        }
+
+        // All positional — extract expressions for IndexedName
+        // (Each element is ActualPart::Designator(ActualDesignator::Expression { .. }))
+        let mut expressions = Vec::new();
+        for elem in assoc_list.elements {
+            use super::association::{ActualDesignator, ActualPart};
+            match elem.actual {
+                ActualPart::Designator(ActualDesignator::Expression { expression, .. }) => {
+                    expressions.push(*expression);
+                }
+                _ => {
+                    // Non-expression actual designator (e.g. OPEN, subtype) —
+                    // treat as function call to preserve fidelity.
+                    // Fall back: restore and re-parse as function call.
+                    parser.restore(save);
+                    let assoc_list2 = AssociationList::parse(parser)?;
+                    parser.expect(TokenKind::RightParen)?;
+                    return Ok(Name::FunctionCall(Box::new(FunctionCall {
+                        function_name: Box::new(prefix_name),
+                        parameters: Some(assoc_list2),
+                    })));
+                }
+            }
+        }
+        return Ok(Name::Indexed(Box::new(IndexedName {
+            prefix: Prefix::Name(Box::new(prefix_name)),
+            expressions,
+        })));
+    }
+    parser.restore(save);
+
+    // Fallback: parse the first expression and check if it contains TO/DOWNTO for a discrete_range.
     let first_expr = Expression::parse(parser)?;
 
     if parser.at_keyword(KeywordKind::To) || parser.at_keyword(KeywordKind::Downto) {
         // This is a slice name: prefix ( simple_expression direction simple_expression )
-        // However, we parsed a full Expression, which might be more than a SimpleExpression.
-        // For the discrete_range, we need to backtrack and parse properly.
         parser.restore(save);
         let discrete_range = parse_discrete_range_in_parens(parser)?;
         parser.expect(TokenKind::RightParen)?;

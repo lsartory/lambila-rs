@@ -1288,8 +1288,8 @@ impl AstNode for SubtypeIndication {
         // resolution_indication can be a function name (a name) or ( element_resolution ).
         // type_mark is also a name.
         // Strategy:
-        //   1. If we see '(' it could be resolution_indication (element_resolution) or constraint.
-        //      We handle parenthesized resolution below.
+        //   1. If we see '(' it could be a parenthesized resolution_indication
+        //      (e.g. `(resolved) STD_ULOGIC_VECTOR`). Try with backtracking.
         //   2. Otherwise, parse a name. Then check: if the next token starts another name
         //      (identifier/extended identifier), the first name was the resolution function
         //      and the second is the type_mark. Otherwise, the first name IS the type_mark.
@@ -1297,11 +1297,23 @@ impl AstNode for SubtypeIndication {
 
         let mut resolution = None;
 
-        // Check for parenthesized resolution_indication: ( element_resolution )
-        // This is distinct from a constraint paren because it contains resolution info.
-        // For simplicity, we don't try to parse element_resolution here --
-        // parenthesized forms are usually constraints on the type_mark.
-        // We just parse name-based resolution.
+        // Check for parenthesized resolution_indication: ( element_resolution ) type_mark
+        // Use backtracking: if we see '(' and it's followed by a closing ')' and then a name,
+        // it's a resolution indication. Otherwise restore and treat as normal.
+        if parser.at(TokenKind::LeftParen) {
+            let save = parser.save();
+            if let Ok(res) = ResolutionIndication::parse(parser) {
+                // After resolution, the next token must start a type_mark (a name)
+                if parser.at(TokenKind::Identifier) || parser.at(TokenKind::ExtendedIdentifier) {
+                    resolution = Some(res);
+                } else {
+                    // Not a resolution indication — restore and fall through
+                    parser.restore(save);
+                }
+            } else {
+                parser.restore(save);
+            }
+        }
 
         // Parse first name
         let first_name = Name::parse(parser)?;

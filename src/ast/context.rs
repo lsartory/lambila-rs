@@ -69,6 +69,19 @@ impl AstNode for ContextClause {
             || parser.at_keyword(KeywordKind::Use)
             || parser.at_keyword(KeywordKind::Context)
         {
+            // Distinguish CONTEXT as a context_reference (context item) vs
+            // a context_declaration (library unit). A context declaration
+            // has the pattern: CONTEXT identifier IS ...
+            if parser.at_keyword(KeywordKind::Context)
+                && let Some(tok1) = parser.peek_nth(1)
+                && (tok1.kind == TokenKind::Identifier
+                    || tok1.kind == TokenKind::ExtendedIdentifier)
+                && let Some(tok2) = parser.peek_nth(2)
+                && tok2.kind == TokenKind::Keyword(KeywordKind::Is)
+            {
+                // This is a context declaration, not a context item.
+                break;
+            }
             items.push(ContextItem::parse(parser)?);
         }
         Ok(ContextClause { items })

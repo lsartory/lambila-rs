@@ -1,3 +1,4 @@
+use lambila::analyzer;
 use lambila::project::dependency::DependencyGraph;
 use lambila::project::library::DesignUnitKind;
 use lambila::project::workspace::Workspace;
@@ -219,6 +220,22 @@ fn cmd_project(args: &[String]) {
                 "\nCompilation order determined ({} design unit(s)).\n",
                 order.len()
             );
+
+            // --- Semantic analysis ---
+            let result = analyzer::analyze(&workspace);
+            if result.errors.is_empty() {
+                eprintln!(
+                    "Semantic analysis OK ({} symbols resolved).\n",
+                    result.global_scope.all_symbols().len()
+                );
+            } else {
+                eprintln!("Semantic analysis found {} error(s):", result.errors.len());
+                for err in &result.errors {
+                    eprintln!("  ✗ {}", err);
+                }
+                eprintln!();
+            }
+
             print_entity_tree(&workspace);
         }
         Err(e) => {
